@@ -254,17 +254,12 @@ class DanmakuListViewState extends State<DanmakuListView> {
     // "return to live" button is the sole resume action.
   }
 
-  void _sendLocalMessage() {
-    final text = _composerController.text.trim();
-    final local = controller.localInteractionController;
-    if (!local.enabled.v || text.isEmpty) return;
-    controller.emitLocalMessage(
-      local.createChat(text, platform: controller.site),
-      showAsDanmaku: local.showAsDanmaku.v,
-      delay: LivePlayController.localChatDeliveryDelay,
-    );
+  Future<void> _submitChat() async {
+    final sent = await controller.submitChat(_composerController.text);
+    if (!sent || !mounted) return;
     _composerController.clear();
-    ToastUtil.show(i18n('local_message_queued'));
+    // Sent: put the keyboard away. A failed send keeps it up with the draft.
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
   void _removeActiveScrollPointer() {
@@ -310,10 +305,7 @@ class DanmakuListViewState extends State<DanmakuListView> {
           Icon(Icons.info_outline, size: 14, color: theme.colorScheme.primary),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(
-              text,
-              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            ),
+            child: Text(text, style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           ),
           TextButton(
             key: const ValueKey('live-play-name-hint-login'),
@@ -429,9 +421,11 @@ class DanmakuListViewState extends State<DanmakuListView> {
                   ),
                 ),
                 Obx(() {
-                  if (!controller.localInteractionController.enabled.v) return const SizedBox.shrink();
+                  if (!controller.showsChatComposer) return const SizedBox.shrink();
                   final state = controller.state.value;
                   final screenMode = state.ui.screenMode;
+                  // 本地字幕样式只作用于本地字幕；发到平台的弹幕是普通样式。
+                  final postsToPlatform = controller.postsChatToPlatform;
                   return Material(
                     color: Theme.of(context).colorScheme.surfaceContainerLow,
                     child: SafeArea(
@@ -444,33 +438,37 @@ class DanmakuListViewState extends State<DanmakuListView> {
                               child: TextField(
                                 controller: _composerController,
                                 textInputAction: TextInputAction.send,
-                                onSubmitted: (_) => _sendLocalMessage(),
+                                onSubmitted: (_) => _submitChat(),
+                                // A touch anywhere else means "done typing".
+                                onTapOutside: (_) => FocusManager.instance.primaryFocus?.unfocus(),
                                 decoration: InputDecoration(
                                   isDense: true,
-                                  hintText: i18n('local_message_hint'),
-                                  prefixIcon: IconButton(
-                                    key: const ValueKey('portrait-local-danmaku-style'),
-                                    tooltip: i18n('local_danmaku_style'),
-                                    onPressed: () => showLocalDanmakuStyleEditor(
-                                      context,
-                                      controller: controller.localInteractionController,
-                                    ),
-                                    icon: Icon(
-                                      Icons.auto_awesome_rounded,
-                                      size: 19,
-                                      color: screenMode == VideoMode.normal
-                                          ? Theme.of(context).primaryColor
-                                          : Color(controller.localInteractionController.danmakuColor.v),
-                                    ),
-                                  ),
+                                  hintText: controller.chatComposerHint,
+                                  prefixIcon: postsToPlatform
+                                      ? null
+                                      : IconButton(
+                                          key: const ValueKey('portrait-local-danmaku-style'),
+                                          tooltip: i18n('local_danmaku_style'),
+                                          onPressed: () => showLocalDanmakuStyleEditor(
+                                            context,
+                                            controller: controller.localInteractionController,
+                                          ),
+                                          icon: Icon(
+                                            Icons.auto_awesome_rounded,
+                                            size: 19,
+                                            color: screenMode == VideoMode.normal
+                                                ? Theme.of(context).primaryColor
+                                                : Color(controller.localInteractionController.danmakuColor.v),
+                                          ),
+                                        ),
                                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(22)),
                                 ),
                               ),
                             ),
                             const SizedBox(width: 6),
                             IconButton.filled(
-                              tooltip: i18n('local_send_message'),
-                              onPressed: _sendLocalMessage,
+                              tooltip: controller.chatComposerSendLabel,
+                              onPressed: controller.sendingRemoteChat.value ? null : _submitChat,
                               icon: const Icon(Icons.send_rounded),
                             ),
                           ],
@@ -654,10 +652,7 @@ List<EmojiToken> _parseEmojiTokens(String text, {Map<String, String>? emoteUrls}
   }
 
   final atlas = EmojiAtlas.instance.regex;
-  final sources = <String>[
-    ...extras.map(RegExp.escape),
-    if (atlas != null) atlas.pattern,
-  ];
+  final sources = <String>[...extras.map(RegExp.escape), if (atlas != null) atlas.pattern];
 
   if (sources.isEmpty) {
     final tokens = [EmojiToken(isEmoji: false, value: text)];

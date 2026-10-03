@@ -161,6 +161,13 @@ class _BackupPageState extends State<BackupPage> {
                 subtitle: i18n('remote_sync_subtitle'),
                 onTap: () => Get.toNamed(RoutePath.kRemoteSync),
               ),
+              context.buildTile(
+                icon: Remix.import_line,
+                title: i18n('simple_live_sync'),
+                subtitle: i18n('simple_live_sync_subtitle'),
+                isLong: true,
+                onTap: () => Get.toNamed(RoutePath.kSimpleLiveSync),
+              ),
               if (Platform.isAndroid || Platform.isIOS)
                 context.buildTile(
                   icon: Remix.qr_code_line,

@@ -6,6 +6,7 @@ import 'package:pure_live/core/index.dart';
 import 'package:pure_live/core/utils/event_bus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:pure_live/shared/platforms/emoji_manager.dart';
+import 'package:pure_live/shared/platforms/live_danmaku_sender.dart';
 import 'package:pure_live/core/models/live_play_quality.dart';
 import 'package:pure_live/core/player/core/playback_source.dart';
 import 'package:pure_live/core/player/core/live_audio_service.dart';
@@ -593,6 +594,93 @@ class LivePlayController extends GetxController
     updateRoom(liveroom: candidate.withAudienceFallbackFrom(detail));
   }
 
+  /// True while a composer line is on its way to the platform.
+  final RxBool sendingRemoteChat = false.obs;
+
+  /// Whether a composer line is posted to the platform instead of staying on
+  /// this device: the room's danmaku engine can send and the viewer is signed
+  /// in there.
+  bool get postsChatToPlatform {
+    final sender = danmakuController.sender;
+    return sender != null && sender.sendBlock == null;
+  }
+
+  /// The composer serves two things: posting to the platform, which only needs
+  /// a signed-in account, and local-only captions, which belong to the local
+  /// interaction feature and follow its switch.
+  bool get showsChatComposer => postsChatToPlatform || localInteractionController.enabled.v;
+
+  String get chatComposerHint {
+    final sender = danmakuController.sender;
+    if (sender == null) return i18n('local_message_hint');
+    return sender.sendBlock == null ? i18n('remote_message_hint') : i18n('remote_message_login_hint');
+  }
+
+  String get chatComposerSendLabel => i18n(postsChatToPlatform ? 'remote_send_message' : 'local_send_message');
+
+  /// Sends one composer line: to the platform when [postsChatToPlatform],
+  /// otherwise as a local-only caption. Returns whether the composer should
+  /// clear its draft.
+  Future<bool> submitChat(String text) async {
+    final content = text.trim();
+    if (content.isEmpty) return false;
+
+    final sender = danmakuController.sender;
+    if (sender == null || sender.sendBlock != null) {
+      final local = localInteractionController;
+      if (!local.enabled.v) return false;
+      emitLocalMessage(
+        local.createChat(content, platform: site),
+        showAsDanmaku: local.showAsDanmaku.v,
+        delay: localChatDeliveryDelay,
+      );
+      ToastUtil.show(i18n('local_message_queued'));
+      return true;
+    }
+
+    if (sendingRemoteChat.value) return false;
+    if (content.runes.length > sender.maxSendLength) {
+      ToastUtil.show(i18n('remote_message_too_long', args: {'count': '${sender.maxSendLength}'}));
+      return false;
+    }
+    sendingRemoteChat.value = true;
+    try {
+      await sender.sendMessage(content);
+    } on LiveDanmakuSendException catch (error) {
+      ToastUtil.show(error.message);
+      return false;
+    } finally {
+      sendingRemoteChat.value = false;
+    }
+    _showOwnPostedMessage(content);
+    ToastUtil.show(i18n('remote_message_sent'));
+    return true;
+  }
+
+  /// Puts the line the viewer just posted on screen. The engine drops the
+  /// platform's push of it, so this is the only copy; it looks like any other
+  /// danmaku (not the local persona's style) plus the own-message box, and it
+  /// does not depend on the local interaction switch.
+  void _showOwnPostedMessage(String content) {
+    final targetRoom = state.value.room.detail;
+    if (targetRoom == null) return;
+    _deliverLocalMessage(
+      LocalMessageDelivery(
+        message: LiveMessage(
+          type: LiveMessageType.chat,
+          userName: i18n('remote_message_self_name'),
+          message: content,
+          color: LiveMessageColor.white,
+          isLocal: true,
+          isSelf: true,
+        ),
+        showAsDanmaku: true,
+        roomId: targetRoom.roomId,
+        platform: targetRoom.platform,
+      ),
+    );
+  }
+
   void emitLocalMessage(LiveMessage msg, {required bool showAsDanmaku, Duration delay = Duration.zero}) {
     if (!localInteractionController.enabled.v) return;
     final targetRoom = state.value.room.detail;
@@ -834,9 +922,8 @@ class LivePlayController extends GetxController
       LiveRestriction.password => i18n('restriction_password'),
       LiveRestriction.adult => i18n('restriction_adult'),
       LiveRestriction.unplayable => i18n('restriction_unplayable'),
-      LiveRestriction.none => room.effectiveLiveStatus == LiveStatus.banned
-          ? i18n('server_error_retry_later')
-          : i18n('stream_not_live'),
+      LiveRestriction.none =>
+        room.effectiveLiveStatus == LiveStatus.banned ? i18n('server_error_retry_later') : i18n('stream_not_live'),
     };
   }
 

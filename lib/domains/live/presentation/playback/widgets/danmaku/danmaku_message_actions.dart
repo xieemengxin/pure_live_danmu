@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:pure_live/core/index.dart';
 import 'package:pure_live/domains/live/data/favorite_room_controller.dart';
@@ -18,6 +20,17 @@ class DanmakuMessageActions {
                 title: Text('${message.userName}: ${message.message}'),
                 subtitle: message.userLevel.isEmpty ? null : Text('Lv.${message.userLevel}'),
               ),
+              if (canPlusOne(message, postsChatToPlatform: !controller.isClosed && controller.postsChatToPlatform))
+                ListTile(
+                  key: const ValueKey('danmaku-plus-one-action'),
+                  leading: const Icon(Icons.exposure_plus_1_rounded),
+                  title: Text(i18n('danmaku_plus_one')),
+                  subtitle: Text(message.message, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    if (!controller.isClosed) unawaited(controller.submitChat(message.message));
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.copy_all_rounded),
                 title: Text(i18n('copy')),
@@ -60,6 +73,12 @@ class DanmakuMessageActions {
       ),
     );
   }
+
+  /// "+1" posts the same line to the platform, so it is offered only for a
+  /// chat line with text and only while the viewer can post there.
+  @visibleForTesting
+  static bool canPlusOne(LiveMessage message, {required bool postsChatToPlatform}) =>
+      postsChatToPlatform && message.type == LiveMessageType.chat && message.message.trim().isNotEmpty;
 
   static Future<void> showKeywordDialog(
     BuildContext context,

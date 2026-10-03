@@ -142,6 +142,9 @@ class LiveMessage {
   final String avatar;
   final bool isLocal;
 
+  /// 观众自己发到平台的那条聊天消息（由本机上屏），画面弹幕会给它加方框。
+  final bool isSelf;
+
   /// Stable identifier supplied by the platform when available. It is used to
   /// suppress replayed packets after a WebSocket reconnect without treating
   /// two genuine messages with the same text as one message.
@@ -168,6 +171,7 @@ class LiveMessage {
     this.fansName = "",
     this.avatar = "",
     this.isLocal = false,
+    this.isSelf = false,
     this.messageId = "",
     this.sentAt,
     this.style,

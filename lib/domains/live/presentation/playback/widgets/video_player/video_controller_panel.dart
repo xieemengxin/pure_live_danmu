@@ -5,16 +5,19 @@ import 'dart:async';
 
 import 'package:flutter_svg/svg.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/core/index.dart';
 import 'package:pure_live/core/utils/event_bus.dart';
 import 'package:flame_barrage/flame_barrage.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/danmaku_frame_pacing.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/self_danmaku_box.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/bullet_magazine/bullet_magazine_wheel.dart';
 import 'package:pure_live/core/platform/platform_utils.dart';
 import 'package:pure_live/domains/live/presentation/playback/states/player_state.dart';
 import 'package:pure_live/domains/live/presentation/playback/states/ui_state.dart';
 import 'package:pure_live/domains/live/presentation/playback/dialogs/play_other.dart';
 import 'package:pure_live/domains/live/presentation/playback/pages/danmaku_settings_page.dart';
-import 'package:pure_live/domains/live/presentation/playback/controllers/live_play_controller.dart';
 import 'package:pure_live/domains/live/presentation/playback/widgets/content_first_panel_layout.dart';
 import 'package:pure_live/domains/live/presentation/playback/widgets/video_player/volume_control.dart';
 import 'package:pure_live/domains/live/presentation/playback/widgets/video_player/video_controller.dart';
@@ -128,7 +131,66 @@ class _VideoControllerPanelState extends State<VideoControllerPanel> {
   Offset? _lastTapGlobalPosition;
   Offset? _lastTapLocalPosition;
 
+  /// The quick-danmaku wheel while a long-press on the bare video is held.
+  final ValueNotifier<BulletMagazineSession?> _bulletMagazine = ValueNotifier<BulletMagazineSession?>(null);
+
   VideoController get controller => widget.controller;
+
+  @override
+  void dispose() {
+    _bulletMagazine.dispose();
+    super.dispose();
+  }
+
+  /// Opens the wheel under a long-press that did not land on a danmaku.
+  void _openBulletMagazine(Offset localPosition, Size surface) {
+    final settings = SettingsService.to.danmaku;
+    if (!settings.enableBulletMagazine.v || controller.showLocked.value) return;
+    // The wheel is a shortcut for the composer, so it follows the composer.
+    if (!controller.livePlayController.showsChatComposer) return;
+    final radius = BulletMagazineGeometry.radiusFor(surface);
+    if (radius == null) return;
+    _bulletMagazine.value = BulletMagazineSession(
+      center: BulletMagazineGeometry.clampCenter(localPosition, surface, radius),
+      radius: radius,
+      surface: surface,
+    );
+    unawaited(HapticFeedback.mediumImpact());
+  }
+
+  void _updateBulletMagazine(Offset localPosition) {
+    final session = _bulletMagazine.value;
+    if (session == null) return;
+    final presets = SettingsService.to.danmaku.bulletMagazinePresets;
+    final slot = BulletMagazineGeometry.slotAt(localPosition - session.center);
+    // An empty sector cannot be selected: releasing over it sends nothing.
+    final selected = slot != null && slot < presets.length && presets[slot].trim().isNotEmpty ? slot : null;
+    if (selected == session.selected) return;
+    if (selected != null) unawaited(HapticFeedback.selectionClick());
+    _bulletMagazine.value = session.withSelected(selected);
+  }
+
+  /// Puts the on-screen keyboard away when a text field holds the focus, and
+  /// says whether it did. With the keyboard up, a touch on the video means
+  /// "done typing"; it must not also land on the danmaku underneath.
+  bool _dismissKeyboard() {
+    final focus = FocusManager.instance.primaryFocus;
+    if (focus == null || focus.context?.widget is! EditableText) return false;
+    focus.unfocus();
+    return true;
+  }
+
+  void _closeBulletMagazine({required bool fire}) {
+    final session = _bulletMagazine.value;
+    if (session == null) return;
+    _bulletMagazine.value = null;
+    final slot = session.selected;
+    if (!fire || slot == null) return;
+    final presets = SettingsService.to.danmaku.bulletMagazinePresets;
+    if (slot >= presets.length || presets[slot].trim().isEmpty) return;
+    unawaited(HapticFeedback.lightImpact());
+    unawaited(controller.livePlayController.submitChat(presets[slot]));
+  }
 
   @override
   void initState() {
@@ -218,6 +280,7 @@ class _VideoControllerPanelState extends State<VideoControllerPanel> {
                     _lastTapLocalPosition = details.localPosition;
                   },
                   onTap: () {
+                    if (_dismissKeyboard()) return;
                     final globalPosition = _lastTapGlobalPosition;
                     final localPosition = _lastTapLocalPosition;
                     if (localPosition != null &&
@@ -251,6 +314,7 @@ class _VideoControllerPanelState extends State<VideoControllerPanel> {
                     }
                   },
                   onLongPressStart: (details) {
+                    if (_dismissKeyboard()) return;
                     if (!shouldHandleVideoSurfaceTap(
                       localPosition: details.localPosition,
                       surfaceSize: context.size ?? Size.zero,
@@ -264,10 +328,19 @@ class _VideoControllerPanelState extends State<VideoControllerPanel> {
                     // message-actions menu opens as before, and releasing
                     // (with the menu closed) resumes the held message.
                     controller.pauseDanmakuAt(details.globalPosition);
-                    controller.handleDanmakuPointer(details.globalPosition, longPress: true);
+                    if (controller.handleDanmakuPointer(details.globalPosition, longPress: true)) return;
+                    // Held on the bare video: the quick-danmaku wheel.
+                    _openBulletMagazine(details.localPosition, context.size ?? Size.zero);
                   },
-                  onLongPressEnd: (_) => controller.resumeHeldDanmaku(),
-                  onLongPressCancel: () => controller.resumeHeldDanmaku(),
+                  onLongPressMoveUpdate: (details) => _updateBulletMagazine(details.localPosition),
+                  onLongPressEnd: (_) {
+                    controller.resumeHeldDanmaku();
+                    _closeBulletMagazine(fire: true);
+                  },
+                  onLongPressCancel: () {
+                    controller.resumeHeldDanmaku();
+                    _closeBulletMagazine(fire: false);
+                  },
                   onDoubleTap: () {
                     if (!controller.showLocked.value) {
                       GlobalPlayerService.instance.player.isWindowFullscreen.value
@@ -284,6 +357,21 @@ class _VideoControllerPanelState extends State<VideoControllerPanel> {
                   controller: controller,
                   barHeight: bottomBarHeight,
                   portraitFullscreen: screenMode == VideoMode.portraitFullscreen,
+                ),
+                Positioned.fill(
+                  child: ValueListenableBuilder<BulletMagazineSession?>(
+                    valueListenable: _bulletMagazine,
+                    builder: (context, session, _) => session == null
+                        ? const SizedBox.shrink()
+                        : BulletMagazineOverlay(
+                            // A fresh key per press replays the entrance animation.
+                            key: ValueKey(session.center),
+                            session: session,
+                            presets: SettingsService.to.danmaku.bulletMagazinePresets.toList(growable: false),
+                            idleCaption: i18n('bullet_magazine_hint'),
+                            emptyCaption: i18n('bullet_magazine_empty_hint'),
+                          ),
+                  ),
                 ),
               ],
             ),
@@ -804,44 +892,60 @@ class DanmakuViewer extends StatelessWidget {
         isVerticalVideo: portraitSource,
         mode: playerSettings.portraitDanmakuMode,
       );
-      return FlameBarrageWidget(
-        controller: controller.danmakuController,
-        // Video gestures own the full surface and forward only hits on actual
-        // barrage bounds, so volume/brightness/double-tap remain responsive.
-        enablePointerEvents: false,
-        config: BarrageConfig(
-          emitInterval: 0.05,
-          fontSize: controller.danmakuFontSize.value,
-          topAreaDistance: controller.danmakuTopArea.value,
-          area: effectiveArea,
-          bottomAreaDistance: controller.danmakuBottomArea.value,
-          baseSpeed: controller.danmakuSpeed.value,
-          opacity: controller.danmakuOpacity.value,
-          fontWeight: FontWeight(controller.danmakuFontWeight.value),
-          letterSpacing: controller.danmakuLetterSpacing.value,
-          strokeWidth: controller.danmakuFontBorder.value,
-          showStroke: controller.enableDanmakuStroke.value,
-          noEmojiMode: controller.noEmojiMode.value,
-          // 海量模式：消息到达即上屏（不再跟排队节奏），且同屏条数不受设置截断。
-          realtimeMode: controller.danmakuMassMode.value,
-          // One GPU-resident bitmap per visible message — the single most
-          // effective switch on low-end GPUs re-rasterizing stroked CJK text
-          // every frame.
-          rasterizeItems: true,
-          fps: settings.danmakuAutoFps.v
+      final config = BarrageConfig(
+        emitInterval: 0.05,
+        fontSize: controller.danmakuFontSize.value,
+        topAreaDistance: controller.danmakuTopArea.value,
+        area: effectiveArea,
+        bottomAreaDistance: controller.danmakuBottomArea.value,
+        baseSpeed: controller.danmakuSpeed.value,
+        opacity: controller.danmakuOpacity.value,
+        fontWeight: FontWeight(controller.danmakuFontWeight.value),
+        letterSpacing: controller.danmakuLetterSpacing.value,
+        strokeWidth: controller.danmakuFontBorder.value,
+        showStroke: controller.enableDanmakuStroke.value,
+        noEmojiMode: controller.noEmojiMode.value,
+        // 海量模式：消息到达即上屏（不再跟排队节奏），且同屏条数不受设置截断。
+        realtimeMode: controller.danmakuMassMode.value,
+        // One GPU-resident bitmap per visible message — the single most
+        // effective switch on low-end GPUs re-rasterizing stroked CJK text
+        // every frame.
+        rasterizeItems: true,
+        fps: danmakuEngineFps(
+          settings.danmakuAutoFps.v
               ? settings.resolvedDanmakuFps(refreshRateMode: SettingsService.to.app.refreshRateMode)
               : controller.danmakuFps.value.clamp(30, 240).toInt(),
-          maxVisibleCount: SettingsService.to.danmaku.effectiveMaxVisibleCount,
-          maxPendingCount: 120,
-          maxPendingAge: const Duration(seconds: 5),
-          fontFamily: controller.danmakuFontFamilyName.value,
-          trackHeight: (controller.danmakuFontSize.value * 1.55).clamp(24.0, 64.0).toDouble(),
-          emojiSize: (controller.danmakuFontSize.value * 1.3).clamp(16.0, 48.0).toDouble(),
-          pictureCacheMaxSize: 96,
-          barragePoolMaxSize: 72,
-          textCacheMaxSize: 320,
         ),
-        emojiAtlas: EmojiAtlas.instance,
+        effectInterceptors: selfDanmakuInterceptors,
+        maxVisibleCount: SettingsService.to.danmaku.effectiveMaxVisibleCount,
+        maxPendingCount: 120,
+        maxPendingAge: const Duration(seconds: 5),
+        fontFamily: controller.danmakuFontFamilyName.value,
+        trackHeight: (controller.danmakuFontSize.value * 1.55).clamp(24.0, 64.0).toDouble(),
+        emojiSize: (controller.danmakuFontSize.value * 1.3).clamp(16.0, 48.0).toDouble(),
+        pictureCacheMaxSize: 96,
+        barragePoolMaxSize: 72,
+        textCacheMaxSize: 320,
+      );
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          FlameBarrageWidget(
+            controller: controller.danmakuController,
+            // Video gestures own the full surface and forward only hits on
+            // actual barrage bounds, so volume/brightness/double-tap remain
+            // responsive.
+            enablePointerEvents: false,
+            config: config,
+            emojiAtlas: EmojiAtlas.instance,
+          ),
+          FlameBarrageWidget(
+            controller: controller.selfDanmakuController,
+            enablePointerEvents: false,
+            config: selfDanmakuLayerConfig(config),
+            emojiAtlas: EmojiAtlas.instance,
+          ),
+        ],
       );
     });
   }
@@ -1450,6 +1554,10 @@ class BottomActionBar extends StatelessWidget {
       return BottomControlSurface(
         visible: shouldShow,
         height: barHeight,
+        bottomInset: fullscreenKeyboardLift(
+          fullscreen: GlobalPlayerService.instance.player.fullscreenUI,
+          keyboardInset: MediaQuery.viewInsetsOf(context).bottom,
+        ),
         child: ControlHoverRegion(
           enabled: shouldShow,
           onEnter: controller.onMouseEnterController,
@@ -1626,10 +1734,11 @@ class BottomActionBar extends StatelessWidget {
   }
 }
 
-/// Room-local composer placed between the two fullscreen control groups.
-/// Pure Live does not impersonate a platform account here: the submitted line
-/// enters the local list and video barrage through the same ordered delivery
-/// queue used by portrait mode.
+/// Composer placed between the two fullscreen control groups. A line goes to
+/// the platform when the viewer is signed in to one that accepts chat (see
+/// `LivePlayController.submitChat`); otherwise it stays a local caption that
+/// enters the list and video barrage through the same ordered delivery queue
+/// used by portrait mode.
 class FullscreenLocalDanmakuComposer extends StatefulWidget {
   const FullscreenLocalDanmakuComposer({super.key, required this.controller});
 
@@ -1639,11 +1748,23 @@ class FullscreenLocalDanmakuComposer extends StatefulWidget {
   State<FullscreenLocalDanmakuComposer> createState() => _FullscreenLocalDanmakuComposerState();
 }
 
-/// The fullscreen composer is a presentation of the room-local interaction
-/// feature, not an entry point that silently changes the user's global setting.
-/// Keeping this decision pure also prevents portrait and landscape fullscreen
-/// layouts from drifting apart when the setting is disabled.
-bool shouldShowFullscreenLocalDanmakuComposer(bool localInteractionEnabled) => localInteractionEnabled;
+/// The fullscreen composer posts to the platform when the viewer is signed in
+/// to one that accepts chat, which does not depend on the local interaction
+/// setting. As a local-caption entry it is a presentation of that feature, not
+/// a way to silently change the user's global setting, so it follows the
+/// switch. Keeping this decision pure also prevents portrait and landscape
+/// fullscreen layouts from drifting apart.
+/// How far the bottom bar rises for the on-screen keyboard.
+///
+/// The fullscreen player has no Scaffold to resize it, so the keyboard would
+/// cover the bar and the composer in it. The inline player sits at the top of
+/// a page whose Scaffold already makes room, and its bar must stay put.
+@visibleForTesting
+double fullscreenKeyboardLift({required bool fullscreen, required double keyboardInset}) =>
+    fullscreen ? keyboardInset : 0;
+
+bool shouldShowFullscreenLocalDanmakuComposer(bool localInteractionEnabled, {bool postsChatToPlatform = false}) =>
+    postsChatToPlatform || localInteractionEnabled;
 
 class _FullscreenLocalDanmakuComposerState extends State<FullscreenLocalDanmakuComposer> {
   final TextEditingController _textController = TextEditingController();
@@ -1689,25 +1810,22 @@ class _FullscreenLocalDanmakuComposerState extends State<FullscreenLocalDanmakuC
     super.dispose();
   }
 
-  void _send() {
-    final text = _textController.text.trim();
-    final live = controller.livePlayController;
-    final local = live.localInteractionController;
-    if (!local.enabled.v || text.isEmpty) return;
-    live.emitLocalMessage(
-      local.createChat(text, platform: live.site),
-      showAsDanmaku: local.showAsDanmaku.v,
-      delay: LivePlayController.localChatDeliveryDelay,
-    );
+  Future<void> _send() async {
+    final sent = await controller.livePlayController.submitChat(_textController.text);
+    if (!sent || !mounted) return;
     _textController.clear();
-    ToastUtil.show(i18n('local_message_queued'));
+    // Sent: put the keyboard away. A failed send keeps it up with the draft.
+    _focusNode.unfocus();
   }
 
   @override
   Widget build(BuildContext context) {
     return Obx(() {
       final local = controller.livePlayController.localInteractionController;
-      if (!shouldShowFullscreenLocalDanmakuComposer(local.enabled.v)) return const SizedBox.shrink();
+      final postsToPlatform = controller.livePlayController.postsChatToPlatform;
+      if (!shouldShowFullscreenLocalDanmakuComposer(local.enabled.v, postsChatToPlatform: postsToPlatform)) {
+        return const SizedBox.shrink();
+      }
 
       final localStyle = local.currentDanmakuStyle;
       return SizedBox(
@@ -1716,73 +1834,79 @@ class _FullscreenLocalDanmakuComposerState extends State<FullscreenLocalDanmakuC
         child: TextField(
           controller: _textController,
           focusNode: _focusNode,
-          style: TextStyle(
-            color: Color(local.danmakuColor.v).withValues(alpha: localStyle.opacity),
-            fontSize: 13,
-            fontWeight: FontWeight(localStyle.fontWeight),
-            fontFamily: localStyle.fontFamily,
-            fontStyle: localStyle.italic ? FontStyle.italic : FontStyle.normal,
-            letterSpacing: localStyle.letterSpacing,
-            shadows: localStyle.showShadow
-                ? [
-                    Shadow(
-                      color: Color(localStyle.shadowColor).withValues(alpha: localStyle.opacity),
-                      blurRadius: localStyle.shadowBlur,
-                      offset: Offset(localStyle.shadowOffset, localStyle.shadowOffset),
-                    ),
-                  ]
-                : null,
-          ),
+          // A posted danmaku is plain; the local caption style only applies to
+          // local captions.
+          style: postsToPlatform
+              ? const TextStyle(color: Colors.white, fontSize: 13)
+              : TextStyle(
+                  color: Color(local.danmakuColor.v).withValues(alpha: localStyle.opacity),
+                  fontSize: 13,
+                  fontWeight: FontWeight(localStyle.fontWeight),
+                  fontFamily: localStyle.fontFamily,
+                  fontStyle: localStyle.italic ? FontStyle.italic : FontStyle.normal,
+                  letterSpacing: localStyle.letterSpacing,
+                  shadows: localStyle.showShadow
+                      ? [
+                          Shadow(
+                            color: Color(localStyle.shadowColor).withValues(alpha: localStyle.opacity),
+                            blurRadius: localStyle.shadowBlur,
+                            offset: Offset(localStyle.shadowOffset, localStyle.shadowOffset),
+                          ),
+                        ]
+                      : null,
+                ),
           textInputAction: TextInputAction.send,
           onSubmitted: (_) => _send(),
           decoration: InputDecoration(
             isDense: true,
             filled: true,
             fillColor: Colors.black54,
-            hintText: i18n('local_message_hint'),
+            hintText: controller.livePlayController.chatComposerHint,
             hintStyle: const TextStyle(color: Colors.white60, fontSize: 13),
-            prefixIcon: IconButton(
-              key: const ValueKey('fullscreen-local-danmaku-style'),
-              tooltip: i18n('local_danmaku_style'),
-              visualDensity: VisualDensity.standard,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints.tightFor(
-                width: portraitFullscreenComposerHeight,
-                height: portraitFullscreenComposerHeight,
-              ),
-              onPressed: () async {
-                controller.isMenuOpen.value = true;
-                controller.stopHideController();
-                try {
-                  await showLocalDanmakuStyleEditor(
-                    context,
-                    controller: controller.livePlayController.localInteractionController,
-                  );
-                } finally {
-                  if (controller.status != PlayerStatus.disposed) {
-                    controller.isMenuOpen.value = false;
-                    controller.enableController();
-                  }
-                }
-              },
-              icon: Icon(Icons.auto_awesome_rounded, color: Color(local.danmakuColor.v), size: 18),
-            ),
+            prefixIcon: postsToPlatform
+                ? null
+                : IconButton(
+                    key: const ValueKey('fullscreen-local-danmaku-style'),
+                    tooltip: i18n('local_danmaku_style'),
+                    visualDensity: VisualDensity.standard,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: portraitFullscreenComposerHeight,
+                      height: portraitFullscreenComposerHeight,
+                    ),
+                    onPressed: () async {
+                      controller.isMenuOpen.value = true;
+                      controller.stopHideController();
+                      try {
+                        await showLocalDanmakuStyleEditor(
+                          context,
+                          controller: controller.livePlayController.localInteractionController,
+                        );
+                      } finally {
+                        if (controller.status != PlayerStatus.disposed) {
+                          controller.isMenuOpen.value = false;
+                          controller.enableController();
+                        }
+                      }
+                    },
+                    icon: Icon(Icons.auto_awesome_rounded, color: Color(local.danmakuColor.v), size: 18),
+                  ),
             prefixIconConstraints: const BoxConstraints(
               minWidth: portraitFullscreenComposerHeight,
               minHeight: portraitFullscreenComposerHeight,
             ),
             suffixIcon: IconButton(
               key: const ValueKey('fullscreen-local-danmaku-send'),
-              tooltip: i18n('local_send_message'),
+              tooltip: controller.livePlayController.chatComposerSendLabel,
               visualDensity: VisualDensity.standard,
-              onPressed: _send,
+              onPressed: controller.livePlayController.sendingRemoteChat.value ? null : _send,
               icon: const Icon(Icons.send_rounded, color: Colors.white, size: 18),
             ),
             suffixIconConstraints: const BoxConstraints(
               minWidth: portraitFullscreenComposerHeight,
               minHeight: portraitFullscreenComposerHeight,
             ),
-            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            contentPadding: EdgeInsets.symmetric(horizontal: postsToPlatform ? 14 : 10, vertical: 8),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(20),
               borderSide: const BorderSide(color: Colors.white24),

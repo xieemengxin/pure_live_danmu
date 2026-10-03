@@ -7,6 +7,7 @@ import 'package:pure_live/core/index.dart';
 import 'package:pure_live/shared/platforms/live_danmaku.dart';
 import 'package:pure_live/domains/live/data/platforms/sites.dart';
 import 'package:pure_live/domains/live/data/favorite_room_controller.dart';
+import 'package:pure_live/domains/live/data/danmaku_shield_matcher.dart';
 
 /// 弹幕引擎工厂：按房间创建对应站点的 LiveDanmaku 实例。
 ///
@@ -182,14 +183,33 @@ class MultiviewDanmakuSession {
     };
   }
 
+  List<String>? _shieldEntries;
+  DanmakuShieldMatcher _shieldMatcher = DanmakuShieldMatcher.none;
+
+  /// 屏蔽词不常变，逐条弹幕都重建匹配器（编译正则）太浪费：内容没变就复用。
+  DanmakuShieldMatcher _shieldMatcherFor(List<String> entries) {
+    final cached = _shieldEntries;
+    if (cached != null && cached.length == entries.length) {
+      var same = true;
+      for (var i = 0; i < entries.length; i++) {
+        if (cached[i] != entries[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) return _shieldMatcher;
+    }
+    _shieldEntries = List<String>.of(entries);
+    return _shieldMatcher = DanmakuShieldMatcher(entries);
+  }
+
   void _handleChatMessage(LiveMessage msg) {
     if (msg.type != LiveMessageType.chat) return;
     if (!_messageGate.accepts(normalizeLiveMessage(msg))) return;
     final favorite = FavoriteRoomController.to;
     final user = msg.userName.trim().toLowerCase();
     if (user.isNotEmpty && favorite.blockedDanmakuUsers.v.contains(user)) return;
-    final text = msg.message.toLowerCase();
-    if (favorite.shieldList.v.any(text.contains)) return;
+    if (_shieldMatcherFor(favorite.shieldList.v).matches(msg.message)) return;
     final danmakuSettings = SettingsService.to.danmaku;
     if (!_repeatedFilter.accepts(
       normalizeLiveMessage(msg),

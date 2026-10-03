@@ -37,6 +37,8 @@ class RoutePath {
   static const kBackup = "/backup";
   static const kRemoteSync = "/remote_sync";
 
+  static const kSimpleLiveSync = "/simple_live_sync";
+
   /// 关于
   static const kAbout = "/about";
 
@@ -81,6 +83,8 @@ class RoutePath {
   static const kToolbox = "/tool_box";
 
   static const kHuyaCookie = "/huya_cookie";
+
+  static const kHuyaWebLogin = "/huya_web_login";
 
   static const kDouyuAccountCookie = "/douyu_account_cookie";
 

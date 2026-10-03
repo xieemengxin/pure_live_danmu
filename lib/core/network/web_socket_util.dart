@@ -111,9 +111,10 @@ class WebScoketUtils {
     this.inactivityTimeout,
     this.reconnectBaseDelay = const Duration(seconds: 1),
     this.shutdownTimeout = const Duration(seconds: 2),
-    this.connector = _connectIoWebSocket,
+    WebSocketConnector? connector,
     List<String>? serverUrls,
-  }) : serverUrls = _uniqueEndpoints(url, backupUrl, serverUrls);
+  }) : connector = connector ?? _connectIoWebSocket,
+       serverUrls = _uniqueEndpoints(url, backupUrl, serverUrls);
 
   WebSocketChannel? webSocket;
   Timer? heartBeatTimer;

@@ -29,6 +29,7 @@ import 'package:pure_live/domains/live/presentation/areas/favorite_areas_page.da
 import 'package:pure_live/domains/live/presentation/area_rooms/area_rooms_page.dart';
 import 'package:pure_live/domains/account/presentation/account/soop/soop_cookie_page.dart';
 import 'package:pure_live/domains/account/presentation/account/huya/huya_cookie_page.dart';
+import 'package:pure_live/domains/account/presentation/account/huya/huya_web_login_page.dart';
 import 'package:pure_live/domains/recorder/presentation/pages/recorder/recorder_page.dart';
 import 'package:pure_live/domains/account/presentation/account/bilibili/qr_login_page.dart';
 import 'package:pure_live/domains/live/presentation/playback/pages/live_play_page.dart';
@@ -36,6 +37,7 @@ import 'package:pure_live/domains/account/presentation/account/douyu/douyu_cooki
 import 'package:pure_live/domains/account/presentation/account/bilibili/bilibili_bindings.dart';
 import 'package:pure_live/domains/account/presentation/account/bilibili/web_login_page.dart';
 import 'package:pure_live/features/remote_receiver/remote_sync_page.dart';
+import 'package:pure_live/features/simple_live_sync/simple_live_sync_page.dart';
 import 'package:pure_live/domains/account/presentation/account/twitch/twitch_cookie_page.dart';
 import 'package:pure_live/domains/account/presentation/account/douyin/douyin_cookie_page.dart';
 import 'package:pure_live/domains/account/presentation/account/kuaishou/kuaishou_cookie_page.dart';
@@ -125,6 +127,11 @@ class AppPages {
       name: RoutePath.kHuyaCookie,
       page: _smoothPage(() => const HuyaCookiePage()),
       bindings: [HuyaCookieBinding()],
+    ),
+    GetPage(
+      name: RoutePath.kHuyaWebLogin,
+      page: _smoothPage(() => const HuyaWebLoginPage()),
+      bindings: [HuyaWebLoginBinding()],
     ),
 
     GetPage(
@@ -231,6 +238,11 @@ class AppPages {
       name: RoutePath.kRemoteSync,
       page: _smoothPage(() => const RemoteSyncPage()),
       bindings: [RemoteSyncBinding()],
+    ),
+    GetPage(
+      name: RoutePath.kSimpleLiveSync,
+      page: _smoothPage(() => const SimpleLiveSyncPage()),
+      bindings: [SimpleLiveSyncBinding()],
     ),
   ];
 }

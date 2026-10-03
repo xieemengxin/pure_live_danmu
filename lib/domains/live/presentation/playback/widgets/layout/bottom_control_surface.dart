@@ -2,11 +2,20 @@ import 'package:flutter/material.dart';
 
 /// Presentation shell shared by the one-row and portrait two-row controls.
 class BottomControlSurface extends StatelessWidget {
-  const BottomControlSurface({super.key, required this.visible, required this.height, required this.child});
+  const BottomControlSurface({
+    super.key,
+    required this.visible,
+    required this.height,
+    required this.child,
+    this.bottomInset = 0,
+  });
 
   final bool visible;
   final double height;
   final Widget child;
+
+  /// Lifts the bar off the bottom edge, e.g. above the on-screen keyboard.
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
@@ -14,7 +23,7 @@ class BottomControlSurface extends StatelessWidget {
     // Interpolating its height would constrain the new child to the old 56 dp
     // for the first frames. Animate only visibility, never layout constraints.
     return Positioned(
-      bottom: 0,
+      bottom: bottomInset,
       left: 0,
       right: 0,
       height: height,

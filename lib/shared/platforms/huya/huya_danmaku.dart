@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:pure_live/core/logging/core_log.dart';
+import 'package:pure_live/core/config/cookie_settings_controller.dart';
+import 'package:pure_live/shared/platforms/huya/huya_send_message.dart';
+import 'package:pure_live/shared/platforms/live_danmaku_sender.dart';
 import 'package:pure_live/shared/platforms/huya/huya_utils.dart';
 import 'package:pure_live/core/models/live_message.dart';
 import 'package:pure_live/core/tars/codec/tars_struct.dart';
@@ -27,10 +31,16 @@ class HuyaDanmakuArgs {
 
 typedef HuyaSuperChatFetcher = Future<List<LiveSuperChatMessage>> Function(int lPid);
 
-class HuyaDanmaku implements LiveDanmaku {
-  HuyaDanmaku({HuyaSuperChatFetcher? superChatFetcher, List<Duration>? superChatRetryDelays})
-    : _superChatFetcher = superChatFetcher ?? ((lPid) => getHuyaSuperChatMessageList(lPid: lPid, first: true)),
-      _superChatRetryDelays = List<Duration>.unmodifiable(superChatRetryDelays ?? defaultSuperChatRetryDelays);
+class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
+  HuyaDanmaku({
+    HuyaSuperChatFetcher? superChatFetcher,
+    List<Duration>? superChatRetryDelays,
+    String Function()? cookieProvider,
+    this._connector,
+    this.sendTimeout = const Duration(seconds: 5),
+  }) : _superChatFetcher = superChatFetcher ?? ((lPid) => getHuyaSuperChatMessageList(lPid: lPid, first: true)),
+       _superChatRetryDelays = List<Duration>.unmodifiable(superChatRetryDelays ?? defaultSuperChatRetryDelays),
+       _cookieProvider = cookieProvider ?? (() => CookieSettingsController.to.huyaCookie.value);
 
   static const List<Duration> defaultSuperChatRetryDelays = <Duration>[
     Duration.zero,
@@ -86,6 +96,29 @@ class HuyaDanmaku implements LiveDanmaku {
   late HuyaDanmakuArgs danmakuArgs;
   int _generation = 0;
 
+  final String Function() _cookieProvider;
+  final WebSocketConnector? _connector;
+
+  /// 等待服务端回应一条 `sendMessage` 的最长时间。
+  final Duration sendTimeout;
+
+  /// cookie 不带 `guid` 时用的设备号；同一个引擎实例内保持不变，这样连接地址和
+  /// 之后每条发送请求报的是同一个设备。
+  late final String _fallbackGuid = _randomHex(16);
+
+  /// 当前这条连接握手时报的观众 uid，匿名连接为 0。
+  int _sessionViewerUid = 0;
+
+  /// 已发出、还在等服务端回应的弹幕，按请求号索引。
+  final Map<int, Completer<void>> _pendingSends = <int, Completer<void>>{};
+  int _lastRequestId = 0;
+
+  /// 自己刚发出的弹幕。本机在发送成功后自己上屏，服务端再把它推回来时据此丢掉，
+  /// 避免同一条出现两次。
+  final List<({String content, DateTime sentAt, int requestId})> _ownMessages =
+      <({String content, DateTime sentAt, int requestId})>[];
+  static const Duration _ownMessageEchoWindow = Duration(seconds: 30);
+
   @override
   Future start(dynamic args) async {
     final generation = ++_generation;
@@ -97,8 +130,14 @@ class HuyaDanmaku implements LiveDanmaku {
     if (generation != _generation) return;
     danmakuArgs = args as HuyaDanmakuArgs;
     markDisconnected();
+    _failPendingSends('弹幕连接已重置，请重新发送');
+    // 登录后把观众身份放进握手地址（网页 H5 客户端的做法），发弹幕要用这条连接；
+    // 未登录时地址不变。
+    final viewer = _viewerCredentials();
+    _sessionViewerUid = viewer?.uid ?? 0;
     webScoketUtils = WebScoketUtils(
-      url: serverUrl,
+      url: viewer == null ? serverUrl : huyaAuthenticatedDanmakuUrl(serverUrl, viewer),
+      connector: _connector,
       heartBeatTime: heartbeatTime,
       onMessage: (e) {
         if (generation == _generation) decodeMessage(e);
@@ -117,11 +156,13 @@ class HuyaDanmaku implements LiveDanmaku {
       onReconnect: () {
         if (generation != _generation) return;
         markDisconnected();
+        _failPendingSends('弹幕连接已断开，请稍后重试');
         onReconnect?.call("与服务器断开连接，正在尝试重连");
       },
       onClose: (e) {
         if (generation != _generation) return;
         markDisconnected();
+        _failPendingSends('弹幕连接已断开，请稍后重试');
         onClose?.call("服务器连接失败$e");
       },
     );
@@ -161,12 +202,125 @@ class HuyaDanmaku implements LiveDanmaku {
     _superChatRefreshQueued = false;
     _emittedSuperChats.clear();
     markDisconnected();
+    _failPendingSends('弹幕连接已关闭');
+    _ownMessages.clear();
     onMessage = null;
     onReconnect = null;
     onClose = null;
     onReady = null;
     await webScoketUtils?.close();
     webScoketUtils = null;
+  }
+
+  HuyaViewerCredentials? _viewerCredentials() =>
+      HuyaViewerCredentials.fromCookie(_cookieProvider(), fallbackGuid: _fallbackGuid);
+
+  @override
+  LiveDanmakuSendBlock? get sendBlock => _viewerCredentials() == null ? LiveDanmakuSendBlock.loginRequired : null;
+
+  @override
+  int get maxSendLength => 20;
+
+  @override
+  Future<void> sendMessage(String text) async {
+    final content = text.trim();
+    if (content.isEmpty) return;
+    final viewer = _viewerCredentials();
+    if (viewer == null) throw const LiveDanmakuSendException('未登录虎牙账号');
+    if (webScoketUtils == null) throw const LiveDanmakuSendException('弹幕通道未就绪，请稍后再试');
+    if (_sessionViewerUid != viewer.uid) {
+      // 进房后才登录或换了账号：这条连接握手时报的还是原来的身份，换成当前账号重连。
+      await start(danmakuArgs);
+    }
+    final socket = webScoketUtils;
+    if (!_connected || socket == null) throw const LiveDanmakuSendException('弹幕通道未就绪，请稍后再试');
+
+    final requestId = _nextRequestId();
+    final trace = _randomHex(8);
+    final completer = Completer<void>();
+    _pendingSends[requestId] = completer;
+    _rememberOwnMessage(content, requestId);
+    try {
+      socket.sendMessage(
+        buildHuyaSendMessageCommand(
+          viewer: viewer,
+          presenterUid: danmakuArgs.uid != 0 ? danmakuArgs.uid : danmakuArgs.topSid,
+          topSid: danmakuArgs.topSid,
+          subSid: danmakuArgs.subSid,
+          content: content,
+          requestId: requestId,
+          traceId: '$trace:$trace:0:0',
+        ),
+      );
+      await completer.future.timeout(sendTimeout);
+    } on TimeoutException {
+      // 虎牙不一定对每条 sendMessage 都回包：只有明确的错误码才算失败，没等到回应
+      // 按已发出处理，否则正常发送也会被误报成失败。
+    } on LiveDanmakuSendException {
+      _ownMessages.removeWhere((entry) => entry.requestId == requestId);
+      rethrow;
+    } finally {
+      _pendingSends.remove(requestId);
+    }
+  }
+
+  int _nextRequestId() {
+    // 以毫秒时间起步，同一毫秒内连发也保证递增，不会在 _pendingSends 里撞号。
+    final now = DateTime.now().millisecondsSinceEpoch & 0x7fffffff;
+    _lastRequestId = now > _lastRequestId ? now : (_lastRequestId + 1) & 0x7fffffff;
+    return _lastRequestId;
+  }
+
+  void _completeSend(HuyaWupReply reply) {
+    final completer = _pendingSends.remove(reply.requestId);
+    if (completer == null || completer.isCompleted) return;
+    if (reply.code == 0) {
+      completer.complete();
+      return;
+    }
+    completer.completeError(
+      LiveDanmakuSendException(
+        reply.code == huyaSendMessageInvalidSession
+            ? '发送失败：登录状态无效，请重新登录虎牙（错误码 ${reply.code}）'
+            : '发送失败（虎牙错误码 ${reply.code}）',
+      ),
+    );
+  }
+
+  void _failPendingSends(String message) {
+    if (_pendingSends.isEmpty) return;
+    final pending = _pendingSends.values.toList(growable: false);
+    _pendingSends.clear();
+    for (final completer in pending) {
+      if (!completer.isCompleted) completer.completeError(LiveDanmakuSendException(message));
+    }
+  }
+
+  void _rememberOwnMessage(String content, int requestId) {
+    final now = DateTime.now();
+    _ownMessages.removeWhere((entry) => now.difference(entry.sentAt) > _ownMessageEchoWindow);
+    _ownMessages.add((content: content, sentAt: now, requestId: requestId));
+  }
+
+  /// 服务端把观众自己刚发的那条推回来了：这一条由本机上屏，推送不再显示。
+  /// 只按"发送者是自己且内容对得上"消掉一次，同账号在别处发的弹幕照常显示。
+  /// 被推回来说明已经送达，还在等回包的那次发送就此完成。
+  bool _isEchoOfOwnMessage(HYMessage message) {
+    if (_sessionViewerUid == 0 || message.userInfo.uid != _sessionViewerUid) return false;
+    final now = DateTime.now();
+    final content = message.content.trim();
+    final index = _ownMessages.indexWhere(
+      (entry) => entry.content == content && now.difference(entry.sentAt) <= _ownMessageEchoWindow,
+    );
+    if (index < 0) return false;
+    final delivered = _pendingSends.remove(_ownMessages.removeAt(index).requestId);
+    if (delivered != null && !delivered.isCompleted) delivered.complete();
+    return true;
+  }
+
+  static String _randomHex(int byteCount) {
+    final random = Random.secure();
+    return List<String>.generate(byteCount, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
   Future<void> decodeMessage(List<int> data) async {
@@ -184,6 +338,9 @@ class HuyaDanmaku implements LiveDanmaku {
         for (final item in push.items) {
           await _decodePush(item.uri, item.msg, messageId: item.messageId);
         }
+      } else if (type == 4) {
+        // EWSCmd_WupRsp：这条连接发出的请求（sendMessage）的回应。
+        _completeSend(parseHuyaWupReply(stream.readBytes(1, false)));
       }
     } catch (e) {
       CoreLog.error(e);
@@ -194,6 +351,7 @@ class HuyaDanmaku implements LiveDanmaku {
     if (uri == 1400) {
       final messageNotice = HYMessage();
       messageNotice.readFrom(TarsInputStream(Uint8List.fromList(payload)));
+      if (_isEchoOfOwnMessage(messageNotice)) return;
       final color = messageNotice.bulletFormat.fontColor;
       onMessage?.call(
         LiveMessage(

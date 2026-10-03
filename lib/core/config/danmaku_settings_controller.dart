@@ -98,6 +98,37 @@ class DanmakuSettingsController extends GetxController {
   final RxBool danmakuAutoFps = hiveBool('danmakuAutoFps', defaultDanmakuAutoFps);
   final RxBool enableDanmakuTapInteraction = hiveBool('enableDanmakuTapInteraction', true);
   final RxBool enableDanmakuLongPressInteraction = hiveBool('enableDanmakuLongPressInteraction', true);
+
+  /// 弹匣：长按视频空白处后按方向快捷发送的预设弹幕。
+  final RxBool enableBulletMagazine = hiveBool('enableBulletMagazine', true);
+
+  /// 固定 [bulletMagazineSlotCount] 条，下标即方向：0 右、1 右上、2 左上、3 左、4 左下、
+  /// 5 右下（与 Simple Live 的弹匣顺序一致，导入后各条落在同一方向）；空串表示没设。
+  final RxList<String> bulletMagazinePresets = hiveStringList('bulletMagazinePresets', emptyBulletMagazinePresets);
+
+  static const int bulletMagazineSlotCount = 6;
+  static const int bulletMagazineMaxLength = 20;
+  static const List<String> emptyBulletMagazinePresets = <String>['', '', '', '', '', ''];
+
+  /// 把任意来源的预设整理成正好六条：去掉首尾空白、截到长度上限、缺的补空串。
+  static List<String> normalizeBulletMagazinePresets(Object? value) {
+    final source = value is List ? value : const <Object?>[];
+    return List<String>.generate(bulletMagazineSlotCount, (index) {
+      final text = index < source.length ? '${source[index] ?? ''}'.trim() : '';
+      final runes = text.runes;
+      return runes.length <= bulletMagazineMaxLength ? text : String.fromCharCodes(runes.take(bulletMagazineMaxLength));
+    }, growable: false);
+  }
+
+  bool get hasBulletMagazinePresets => bulletMagazinePresets.any((preset) => preset.trim().isNotEmpty);
+
+  void setBulletMagazinePreset(int index, String text) {
+    if (index < 0 || index >= bulletMagazineSlotCount) return;
+    final updated = normalizeBulletMagazinePresets(bulletMagazinePresets);
+    updated[index] = text;
+    bulletMagazinePresets.v = normalizeBulletMagazinePresets(updated);
+  }
+
   final RxBool collapseRepeatedDanmaku = hiveBool('collapseRepeatedDanmaku', false);
   final RxInt repeatedDanmakuWindowSeconds = hiveInt('repeatedDanmakuWindowSeconds', 5);
   final RxInt danmakuInteractionMigration = hiveInt('danmakuInteractionMigration', 0);
@@ -204,6 +235,8 @@ class DanmakuSettingsController extends GetxController {
       'danmakuAutoFps': danmakuAutoFps.v,
       'enableDanmakuTapInteraction': enableDanmakuTapInteraction.v,
       'enableDanmakuLongPressInteraction': enableDanmakuLongPressInteraction.v,
+      'enableBulletMagazine': enableBulletMagazine.v,
+      'bulletMagazinePresets': normalizeBulletMagazinePresets(bulletMagazinePresets),
       'collapseRepeatedDanmaku': collapseRepeatedDanmaku.v,
       'repeatedDanmakuWindowSeconds': repeatedDanmakuWindowSeconds.v,
       'savedDanmakuTemplate': savedDanmakuTemplate.v,
@@ -256,6 +289,8 @@ class DanmakuSettingsController extends GetxController {
       'danmakuAutoFps': typed<bool>(json['danmakuAutoFps'] ?? defaultDanmakuAutoFps),
       'enableDanmakuTapInteraction': typed<bool>(json['enableDanmakuTapInteraction'] ?? true),
       'enableDanmakuLongPressInteraction': typed<bool>(json['enableDanmakuLongPressInteraction'] ?? true),
+      'enableBulletMagazine': typed<bool>(json['enableBulletMagazine'] ?? true),
+      'bulletMagazinePresets': normalizeBulletMagazinePresets(json['bulletMagazinePresets']),
       'collapseRepeatedDanmaku': typed<bool>(json['collapseRepeatedDanmaku'] ?? false),
       'repeatedDanmakuWindowSeconds': typed<int>(
         (json['repeatedDanmakuWindowSeconds'] ?? 5).toInt().clamp(1, 30).toInt(),
@@ -307,6 +342,8 @@ class DanmakuSettingsController extends GetxController {
     danmakuAutoFps.v = parsed['danmakuAutoFps'];
     enableDanmakuTapInteraction.v = parsed['enableDanmakuTapInteraction'];
     enableDanmakuLongPressInteraction.v = parsed['enableDanmakuLongPressInteraction'];
+    enableBulletMagazine.v = parsed['enableBulletMagazine'];
+    bulletMagazinePresets.v = parsed['bulletMagazinePresets'];
     collapseRepeatedDanmaku.v = parsed['collapseRepeatedDanmaku'];
     repeatedDanmakuWindowSeconds.v = parsed['repeatedDanmakuWindowSeconds'];
     savedDanmakuTemplate.v = parsed['savedDanmakuTemplate'];
@@ -348,6 +385,8 @@ class DanmakuSettingsController extends GetxController {
       'danmakuAutoFps': danmaku['danmakuAutoFps'] ?? defaultDanmakuAutoFps,
       'enableDanmakuTapInteraction': danmaku['enableDanmakuTapInteraction'] ?? true,
       'enableDanmakuLongPressInteraction': danmaku['enableDanmakuLongPressInteraction'] ?? true,
+      'enableBulletMagazine': danmaku['enableBulletMagazine'] ?? true,
+      'bulletMagazinePresets': normalizeBulletMagazinePresets(danmaku['bulletMagazinePresets']),
       'collapseRepeatedDanmaku': danmaku['collapseRepeatedDanmaku'] ?? false,
       'repeatedDanmakuWindowSeconds': (danmaku['repeatedDanmakuWindowSeconds'] ?? 5).toInt().clamp(1, 30).toInt(),
       'savedDanmakuTemplate': danmaku['savedDanmakuTemplate']?.toString() ?? '',

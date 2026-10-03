@@ -8,6 +8,8 @@ import 'package:flutter/scheduler.dart';
 import 'package:pure_live/core/index.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:flame_barrage/flame_barrage.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/danmaku_frame_pacing.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/self_danmaku_box.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:volume_controller/volume_controller.dart';
 import 'package:pure_live/core/player/core/playback_source.dart';
@@ -52,6 +54,9 @@ class PlatformHelper {
 class DanmakuManager {
   final BarrageController controller;
   final BarrageController pipController;
+
+  /// The layer for the viewer's own danmaku; see [selfDanmakuLayerConfig].
+  final BarrageController selfController;
   final List<Worker> workers = [];
   final SettingsService settingsService;
   final VideoController videoController;
@@ -64,6 +69,7 @@ class DanmakuManager {
   DanmakuManager({
     required this.controller,
     required this.pipController,
+    required this.selfController,
     required this.settingsService,
     required this.videoController,
   });
@@ -142,14 +148,9 @@ class DanmakuManager {
     }
     final context = Get.context;
     if (context == null) return;
-    controller.pause();
-    unawaited(
-      DanmakuMessageActions.show(
-        context,
-        message,
-        controller: videoController.livePlayController,
-      ).whenComplete(controller.resume),
-    );
+    // The sheet covers only part of the screen; the barrage keeps scrolling
+    // behind it rather than freezing until the sheet is dismissed.
+    unawaited(DanmakuMessageActions.show(context, message, controller: videoController.livePlayController));
   }
 
   void _scheduleConfigUpdate() {
@@ -192,7 +193,7 @@ class DanmakuManager {
     final localStyle = msg.isLocal ? msg.style : null;
     final settings = settingsService.danmaku;
     if (!videoController.hideDanmaku.value) {
-      controller.send(
+      (msg.isSelf ? selfController : controller).send(
         BarrageItem(
           content: msg.message,
           type: switch (localStyle?.placement) {
@@ -204,6 +205,7 @@ class DanmakuManager {
           userName: msg.userName,
           // 引擎不读它，但宿主撤回时要按这个 id 把这一条撤下来。
           id: msg.messageId,
+          priority: msg.isSelf ? selfDanmakuPriority : 0,
           textColor: originalColor,
           fontSize: localStyle?.fontSize,
           fontWeight: localStyle == null ? null : FontWeight(localStyle.fontWeight),
@@ -218,7 +220,11 @@ class DanmakuManager {
           shadowColor: localStyle == null ? null : Color(localStyle.shadowColor),
           shadowBlur: localStyle?.shadowBlur,
           shadowOffset: localStyle == null ? null : Offset(localStyle.shadowOffset, localStyle.shadowOffset),
-          fixedDuration: localStyle == null ? null : Duration(milliseconds: localStyle.fixedDurationMs),
+          fixedDuration: msg.isSelf
+              ? selfDanmakuCacheMarker
+              : localStyle == null
+              ? null
+              : Duration(milliseconds: localStyle.fixedDurationMs),
           // A single px/s value keeps portrait, landscape and desktop motion
           // consistent. Lane collision avoidance is handled by the engine.
           baseSpeed: localStyle?.baseSpeed ?? videoController.danmakuSpeed.value,
@@ -241,6 +247,7 @@ class DanmakuManager {
             LiveMessagePlacement.bottom => BarrageType.bottomFixed,
             _ => BarrageType.scroll,
           },
+          priority: msg.isSelf ? selfDanmakuPriority : 0,
           textColor: originalColor,
           fontSize: localStyle?.fontSize,
           fontWeight: localStyle == null ? null : FontWeight(localStyle.fontWeight),
@@ -255,7 +262,11 @@ class DanmakuManager {
           shadowColor: localStyle == null ? null : Color(localStyle.shadowColor),
           shadowBlur: localStyle?.shadowBlur,
           shadowOffset: localStyle == null ? null : Offset(localStyle.shadowOffset, localStyle.shadowOffset),
-          fixedDuration: localStyle == null ? null : Duration(milliseconds: localStyle.fixedDurationMs),
+          fixedDuration: msg.isSelf
+              ? selfDanmakuCacheMarker
+              : localStyle == null
+              ? null
+              : Duration(milliseconds: localStyle.fixedDurationMs),
           baseSpeed: localStyle?.baseSpeed,
         ),
       );
@@ -296,6 +307,7 @@ class DanmakuManager {
     workers.clear();
     controller.clear();
     pipController.clear();
+    selfController.clear();
   }
 }
 
@@ -457,6 +469,7 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
   bool get _ownsVolume => !_isDisposed && _playerManager.ownsVideoController(this);
   late final BarrageController danmakuController;
   late final BarrageController pipDanmakuController;
+  late final BarrageController selfDanmakuController;
   late final DanmakuManager _danmakuManager;
 
   // Keys
@@ -521,9 +534,11 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
   void _initControllers() {
     danmakuController = BarrageController();
     pipDanmakuController = BarrageController();
+    selfDanmakuController = BarrageController();
     _danmakuManager = DanmakuManager(
       controller: danmakuController,
       pipController: pipDanmakuController,
+      selfController: selfDanmakuController,
       settingsService: _settingsService,
       videoController: this,
     );
@@ -1016,7 +1031,8 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
         strokeWidth: danmakuFontBorder.value,
         showStroke: enableDanmakuStroke.value,
         noEmojiMode: noEmojiMode.value,
-        fps: resolvedFps,
+        fps: danmakuEngineFps(resolvedFps),
+        effectInterceptors: selfDanmakuInterceptors,
         // 这份 Config 会直接推进已挂载的引擎（帧回调阶段），面板 widget 的重建在
         // 同一帧的 build 阶段随后覆盖它。海量模式的三个字段两边必须一致，否则
         // 只靠 updateDanmaku 触发的那次（例如刷新率变化）会把海量模式悄悄改回去。
@@ -1099,6 +1115,7 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
     pipDanmakuController.resume();
     danmakuController.clear();
     pipDanmakuController.clear();
+    selfDanmakuController.clear();
   }
 
   // EPG管理

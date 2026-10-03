@@ -4,6 +4,7 @@
 /// 也不是控制器，只是路由的装配清单，所以收在 app/router 里合成一个文件。
 library;
 
+import 'package:pure_live/features/simple_live_sync/simple_live_sync_receiver.dart';
 import 'package:pure_live/core/index.dart' hide SearchController;
 
 import 'package:pure_live/domains/live/presentation/pagination/live_directory_controller.dart';
@@ -12,6 +13,7 @@ import 'package:pure_live/domains/account/presentation/account/account_controlle
 import 'package:pure_live/domains/account/presentation/account/douyin/douyin_cookie_controller.dart';
 import 'package:pure_live/domains/account/presentation/account/douyu/douyu_cookie_controller.dart';
 import 'package:pure_live/domains/account/presentation/account/huya/huya_cookie_controller.dart';
+import 'package:pure_live/domains/account/presentation/account/huya/huya_web_login_controller.dart';
 import 'package:pure_live/domains/account/presentation/account/kuaishou/kuaishou_cookie_controller.dart';
 import 'package:pure_live/domains/account/presentation/account/soop/soop_cookie_controller.dart';
 import 'package:pure_live/domains/account/presentation/account/twitch/twitch_cookie_controller.dart';
@@ -56,6 +58,13 @@ class HuyaCookieBinding extends Binding {
   @override
   List<Bind> dependencies() {
     return [Bind.lazyPut(() => HuyaCookieController())];
+  }
+}
+
+class HuyaWebLoginBinding extends Binding {
+  @override
+  List<Bind> dependencies() {
+    return [Bind.lazyPut(() => HuyaWebLoginController())];
   }
 }
 
@@ -198,6 +207,13 @@ class RecorderBinding extends Binding {
   @override
   List<Bind> dependencies() {
     return [Bind.lazyPut(() => RecorderController())];
+  }
+}
+
+class SimpleLiveSyncBinding extends Binding {
+  @override
+  List<Bind> dependencies() {
+    return [Bind.lazyPut(SimpleLiveSyncReceiver.new)];
   }
 }
 

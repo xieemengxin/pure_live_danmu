@@ -1,16 +1,18 @@
 import 'dart:async';
+
 import 'package:pure_live/core/index.dart';
 import 'package:pure_live/core/logging/core_log.dart';
 import 'package:media_core_danmaku/media_core_danmaku.dart';
 import 'package:pure_live/shared/platforms/live_danmaku.dart';
+import 'package:pure_live/shared/platforms/live_danmaku_sender.dart';
 import 'package:pure_live/shared/platforms/empty_danmaku.dart';
 import 'package:pure_live/domains/live/data/platforms/sites.dart';
 import 'package:pure_live/domains/live/data/platforms/danmaku_emote_loader.dart';
 import 'package:pure_live/domains/live/data/favorite_room_controller.dart';
+import 'package:pure_live/domains/live/data/danmaku_shield_matcher.dart';
 import 'package:pure_live/core/player/core/live_message_normalization.dart';
 import 'package:pure_live/domains/live/presentation/playback/states/live_play_state.dart';
 import 'package:pure_live/domains/live/presentation/playback/controllers/danmaku_session_host.dart';
-
 
 /// Owns exactly one room-bound danmaku session.
 ///
@@ -49,11 +51,17 @@ class DanmakuController extends GetxController {
   DateTime? _lastStatusAt;
   bool _maskedNameNoticeShown = false;
   Set<String> _blockedUsers = const <String>{};
-  List<String> _blockedKeywords = const <String>[];
+  DanmakuShieldMatcher _shieldMatcher = DanmakuShieldMatcher.none;
 
   LivePlayState get _state => _main.state.value;
   bool get _initialized => _liveDanmaku != null;
   LiveDanmaku get liveDanmaku => _liveDanmaku!;
+
+  /// The room's engine, when its platform lets a signed-in viewer post chat.
+  LiveDanmakuSender? get sender {
+    final Object? engine = _liveDanmaku;
+    return engine is LiveDanmakuSender ? engine : null;
+  }
 
   @override
   void onInit() {
@@ -281,8 +289,7 @@ class DanmakuController extends GetxController {
   bool _isBlocked(LiveMessage message) {
     final user = message.userName.trim().toLowerCase();
     if (user.isNotEmpty && !_maskedName.hasMatch(user) && _blockedUsers.contains(user)) return true;
-    final text = message.message.toLowerCase();
-    return _blockedKeywords.any(text.contains);
+    return _shieldMatcher.matches(message.message);
   }
 
   void _refreshFilters() {
@@ -293,10 +300,7 @@ class DanmakuController extends GetxController {
         // 历史/导入进来的打码名一并忽略：它们本来会误伤其他观众。
         .where((user) => !_maskedName.hasMatch(user))
         .toSet();
-    _blockedKeywords = favorite.shieldList
-        .map((keyword) => keyword.trim().toLowerCase())
-        .where((keyword) => keyword.isNotEmpty)
-        .toList(growable: false);
+    _shieldMatcher = DanmakuShieldMatcher(favorite.shieldList);
   }
 
   void _updateSimilarityFilterConfig() {

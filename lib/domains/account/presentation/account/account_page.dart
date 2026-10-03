@@ -5,6 +5,8 @@ import 'package:pure_live/core/index.dart';
 import 'package:pure_live/core/network/douyu_utils.dart';
 import 'package:pure_live/domains/account/presentation/account/account_controller.dart';
 import 'package:pure_live/domains/account/data/bilibili_account_service.dart';
+import 'package:pure_live/domains/account/presentation/account/huya/huya_web_login_controller.dart';
+import 'package:pure_live/shared/platforms/huya/huya_send_message.dart';
 
 class AccountPage extends GetView<AccountController> {
   const AccountPage({super.key});
@@ -46,19 +48,28 @@ class AccountPage extends GetView<AccountController> {
 
             Obx(() {
               final isLogined = cookie.huyaCookie.v.isNotEmpty;
+              final uid = HuyaViewerCredentials.fromCookie(cookie.huyaCookie.v, fallbackGuid: '')?.uid;
               return _buildAccountTile(
                 context,
                 logo: 'assets/images/huya.png',
                 title: i18n("site_huya"),
-                subtitle: isLogined ? i18n("logined") : i18n("set_cookie"),
+                subtitle: isLogined
+                    ? uid == null
+                          ? i18n("logined")
+                          : '${i18n("logined")} · $uid'
+                    : i18n("not_logged_in"),
                 isLogined: isLogined,
                 onTap: () => isLogined
                     ? _showLogoutDialog(
                         context,
                         accountName: i18n('site_huya'),
-                        onConfirm: () => cookie.huyaCookie.v = "",
+                        onConfirm: () {
+                          cookie.huyaCookie.v = "";
+                          // 应用内浏览器里的会话也清掉，否则再次网页登录会直接取回它。
+                          unawaited(HuyaWebLoginController.clearBrowserSession().catchError((_) {}));
+                        },
                       )
-                    : Get.toNamed(RoutePath.kHuyaCookie),
+                    : AppNavigator.toHuyaLogin(),
               );
             }),
             Obx(() {

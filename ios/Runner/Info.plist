@@ -57,6 +57,8 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<string>No</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Receive data synced from other devices on the local network</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Photos can be shared to and used in this app</string>
 	<key>NSUserActivityTypes</key>

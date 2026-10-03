@@ -3,6 +3,8 @@ import 'package:pure_live/domains/live/domain/global_player_service.dart';
 import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/compact_danmaku_metrics.dart';
 import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/portrait_danmaku_policy.dart';
 import 'package:flame_barrage/flame_barrage.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/danmaku_frame_pacing.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/self_danmaku_box.dart';
 import 'package:pure_live/domains/live/presentation/playback/widgets/video_player/video_controller.dart';
 
 /// The compact (picture-in-picture / small-window) danmaku surface.
@@ -96,7 +98,8 @@ class CompactDanmakuOverlay extends StatelessWidget {
                   showStroke: typography.showStroke,
                   noEmojiMode: noEmojiMode,
                   strokeWidth: typography.strokeWidth,
-                  fps: fps,
+                  fps: danmakuEngineFps(fps),
+                  effectInterceptors: selfDanmakuInterceptors,
                   safeArea: false,
                   trackHeight: metrics.trackHeight,
                   emojiSize: metrics.emojiSize,

@@ -95,6 +95,27 @@ class AppNavigator {
   }
 
   /// 跳转至哔哩哔哩登录
+  /// 虎牙登录：应用内浏览器可用的平台（Linux 之外）可以走网页登录，也可以直接
+  /// 粘贴 cookie。
+  static Future<void> toHuyaLogin() async {
+    if (Platform.isLinux) {
+      await Get.toNamed(RoutePath.kHuyaCookie);
+      return;
+    }
+    final webLogin = i18n('huya_web_login');
+    final pasteCookie = i18n('set_cookie');
+    final result = await AppPromptDialogs.showOptionDialog(
+      [webLogin, pasteCookie],
+      '',
+      title: i18n('select_login_method'),
+    );
+    if (result == webLogin) {
+      await Get.toNamed(RoutePath.kHuyaWebLogin);
+    } else if (result == pasteCookie) {
+      await Get.toNamed(RoutePath.kHuyaCookie);
+    }
+  }
+
   static Future toBiliBiliLogin() async {
     var contents = [i18n("sms_login"), i18n("qrcode_login")];
     if (Platform.isAndroid || Platform.isIOS) {

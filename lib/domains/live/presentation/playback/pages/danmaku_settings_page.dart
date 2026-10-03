@@ -1,3 +1,4 @@
+import 'package:pure_live/domains/live/presentation/playback/widgets/bullet_magazine/bullet_magazine_editor.dart';
 import 'package:pure_live/core/index.dart';
 import 'package:pure_live/core/config/danmaku_settings_controller.dart';
 import 'package:pure_live/core/consts/app_consts.dart';
@@ -481,7 +482,24 @@ class _DanmakuSettingsContentState extends State<DanmakuSettingsContent> {
             ],
           ),
           const SizedBox(height: 20),
-
+          context.buildGroupTitle(i18n('bullet_magazine')),
+          const SizedBox(height: 8),
+          reactiveCard(
+            () => [
+              _switch(
+                theme,
+                title: i18n('bullet_magazine_enable'),
+                subtitle: i18n('bullet_magazine_desc'),
+                value: SettingsService.to.danmaku.enableBulletMagazine.v,
+                onChanged: (v) => SettingsService.to.danmaku.enableBulletMagazine.v = v,
+                labelColor: labelColor,
+              ),
+              BulletMagazineEditor(
+                presets: SettingsService.to.danmaku.bulletMagazinePresets.toList(growable: false),
+                onChanged: SettingsService.to.danmaku.setBulletMagazinePreset,
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
         ],
       ),

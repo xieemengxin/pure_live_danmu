@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:remixicon/remixicon.dart';
 import 'package:pure_live/core/index.dart';
 import 'package:flame_barrage/flame_barrage.dart';
+import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/danmaku_frame_pacing.dart';
 import 'package:media_core/media_core.dart' show PlayerId;
 import 'package:media_core_media_kit/media_core_media_kit.dart';
 import 'package:pure_live/core/player/presentation/fullscreen_window.dart';
@@ -1365,9 +1366,11 @@ BarrageConfig _buildBarrageConfig({required bool isVerticalVideo}) {
     showStroke: settings.enableDanmakuStroke.v,
     noEmojiMode: settings.noEmojiMode.v,
     realtimeMode: settings.danmakuMassMode.v,
-    fps: settings.danmakuAutoFps.v
-        ? settings.resolvedDanmakuFps(refreshRateMode: SettingsService.to.app.refreshRateMode)
-        : settings.danmakuFps.v.clamp(30, 240).toInt(),
+    fps: danmakuEngineFps(
+      settings.danmakuAutoFps.v
+          ? settings.resolvedDanmakuFps(refreshRateMode: SettingsService.to.app.refreshRateMode)
+          : settings.danmakuFps.v.clamp(30, 240).toInt(),
+    ),
     maxVisibleCount: settings.effectiveMaxVisibleCount,
     maxPendingCount: 120,
     maxPendingAge: const Duration(seconds: 5),
