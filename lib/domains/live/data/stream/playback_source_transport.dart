@@ -1,0 +1,382 @@
+import 'dart:async';
+import 'dart:developer' as developer;
+
+import 'package:dio/dio.dart';
+import 'package:media_core_ingest/media_core_ingest.dart';
+import 'package:pure_live/domains/recorder/data/services/ffmpeg_hls_input_relay.dart';
+import 'package:pure_live/domains/live/data/stream/flv_splice_relay.dart';
+
+import 'flv_legacy_hevc_relay.dart';
+import 'playback_ingest_needs.dart';
+
+import 'package:pure_live/core/player/core/ingest_ffmpeg_registry.dart';
+
+import 'playback_manifest_probe.dart';
+
+import 'package:pure_live/core/player/core/playback_proxy_policy.dart';
+import 'package:pure_live/core/player/core/playback_input_lease.dart';
+
+class _PlaybackInputCreation {
+  _PlaybackInputCreation(this.joinOnCancel) {
+    // open always observes the factory; teardown may also join it. Installing
+    // an observer now avoids unhandled errors when no cancellation is pending.
+    unawaited(settled.future.catchError((Object _) {}));
+  }
+  final bool joinOnCancel;
+  final cancel = CancelToken();
+  final settled = Completer<void>();
+}
+
+/// Owned by one UnifiedPlayer, not by the route or by a quality label.
+/// Native completion can arrive after a manager deadline; its input must not
+/// become active again after cancellation, replacement or disposal.
+class PlaybackSourceTransport {
+  PlaybackSourceTransport({this._createInput});
+  final PlaybackInputFactory? _createInput;
+  final Set<_PlaybackInputCreation> _creating = {};
+  final Set<PlaybackInputLease> _pending = {};
+  final Set<PlaybackInputLease> _retiring = {};
+  PlaybackInputLease? _active;
+
+  /// Remote session closure can invalidate a committed input before a user
+  /// resumes. Consumers reacquire their recipe instead of replaying its URI.
+  bool get activeInputIsUsable => !_closed && (_active?.isUsable ?? false);
+  int _generation = 0;
+  bool _closed = false;
+  Future<void>? _closing;
+
+  static Future<PlaybackInputLease> _createRelay(
+    String url,
+    Map<String, String> headers,
+    HlsSourceQueryPolicy policy,
+  ) async {
+    // This string is an argument value, never a shell command. Validate before
+    // encoding it as CRLF-delimited HTTP fields to preserve the header boundary.
+    final name = RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$");
+    for (final entry in headers.entries) {
+      if (!name.hasMatch(entry.key) || RegExp(r'[\r\n\x00]').hasMatch(entry.value)) {
+        throw const FormatException('Invalid playback input header');
+      }
+    }
+    final directive = PlaybackProxyPolicy.currentDirective();
+    final relay = await FFmpegHlsInputRelay.startForArguments(
+      [
+        if (headers.isNotEmpty) ...['-headers', headers.entries.map((e) => '${e.key}: ${e.value}\r\n').join()],
+        '-i',
+        url,
+      ],
+      sourceQueryPolicy: policy,
+      findProxy: (_) => directive,
+    );
+    if (relay == null) throw const FormatException('Expected a policy-bound HLS input');
+    return PlaybackInputLease(relay.inputUri, relay.close);
+  }
+
+  static Future<PlaybackInputLease> _createSpliceRelay(
+    String url,
+    Map<String, String> headers,
+    DateTime refreshAt,
+    FlvSourceRenewer renew,
+  ) async {
+    final directive = PlaybackProxyPolicy.currentDirective();
+    final relay = await FlvSpliceRelay.start(
+      FlvLeasedSource(Uri.parse(url), refreshAt: refreshAt),
+      renew: renew,
+      headers: headers,
+      findProxy: (_) => directive,
+    );
+    return PlaybackInputLease(relay.inputUri, relay.close, isUsable: () => !relay.isClosed);
+  }
+
+  static Future<PlaybackInputLease> _createLegacyHevcRelay(String url, Map<String, String> headers) async {
+    final directive = PlaybackProxyPolicy.currentDirective();
+    final relay = await FlvLegacyHevcRelay.start(url, headers, findProxy: (_) => directive);
+    return PlaybackInputLease(relay.inputUri, relay.close, isUsable: () => !relay.isClosed);
+  }
+
+  /// Serves a rewritten manifest tree from loopback: every child the player sees
+  /// is already an absolute URL, so a bare `media.95.mp4` can no longer become a
+  /// Windows path on the way to the demuxer.
+  static Future<PlaybackInputLease> _createIngestRelay(
+    String url,
+    Map<String, String> headers, {
+    String? rootManifest,
+    Uri Function(Uri)? childUriPolicy,
+    bool sessionCookies = false,
+    HlsSourceQueryPolicy? matchesPolicy,
+  }) async {
+    final Uri source = Uri.parse(url);
+    if (matchesPolicy != null && !matchesPolicy.matchesSource(source)) {
+      throw const FormatException('Playback query policy does not match selected input');
+    }
+    final relay = await LoopbackIngestRelay.start(
+      source: source,
+      headers: headers,
+      rootManifest: rootManifest,
+      childUriPolicy: childUriPolicy,
+      sessionCookies: sessionCookies,
+    );
+    return PlaybackInputLease(relay.inputUri, relay.close, isUsable: () => !relay.isClosed);
+  }
+
+  /// Remuxes an upstream the player cannot parse: FFmpeg reads it once and the
+  /// player reads a plain local playlist instead.
+  static Future<PlaybackInputLease> _createFfmpegRelay(String url, Map<String, String> headers) async {
+    final relay = await FfmpegIngestRelay.start(
+      source: Uri.parse(url),
+      startFfmpeg: startIngestFfmpeg,
+      headers: headers,
+    );
+    return PlaybackInputLease(relay.inputUri, relay.close);
+  }
+
+  /// [rewriteLegacyHevcFlv] is for libmpv consumers only: its FFmpeg 7.1 does
+  /// not know codec-id-12 HEVC FLV, so known CDNs go through a local rewrite.
+  ///
+  /// A leased FLV source ([refreshAt] and [renewFlv]) is served through
+  /// [FlvSpliceRelay], which replaces the expiring URL underneath one
+  /// continuous stream.
+  Future<void> open({
+    required String url,
+    required List<String> urls,
+    required Map<String, String> headers,
+    required HlsSourceQueryPolicy? policy,
+    required PlaybackNativeOpen nativeOpen,
+    bool rewriteLegacyHevcFlv = false,
+    DateTime? refreshAt,
+    FlvSourceRenewer? renewFlv,
+  }) async {
+    final legacyFactory = _createInput;
+    // Decide from the manifest itself rather than from a per-platform list: a
+    // manifest whose children are bare names (`media.95.mp4`) or absolute paths
+    // cannot be handed to the native resolver, because a reader that loses the
+    // manifest URL looks for them next to itself and turns them into local paths
+    // (`No protocol handler found to open URL \tc.livehls\...\media.95.mp4`).
+    // A manifest that already writes absolute URLs is handed over untouched.
+    final Uri? ingestSource = Uri.tryParse(url);
+    final bool sourceIsManifest = ingestSource != null && isHlsManifestUri(ingestSource);
+    PlaybackManifestProbe? probe;
+    if (policy == null && sourceIsManifest) {
+      probe = await probePlaybackManifest(url, headers: Map<String, String>.unmodifiable(headers));
+      // A provider we could not read still gets its declared needs applied, so a
+      // known-quirky host does not regress just because one read failed.
+      final Set<IngestNeed> needs = probe?.kind.requiresRewrite == true
+          ? const <IngestNeed>{IngestNeed.relativeChildren}
+          : probe == null
+          ? playbackIngestNeeds(ingestSource)
+          : const <IngestNeed>{};
+      if (probe != null) {
+        developer.log(
+          'manifest ${ingestSource.host}: ${probe.kind.describe()} -> '
+          '${needs.isEmpty ? 'direct' : 'loopback rewrite'}',
+          name: 'PlaybackIngest',
+        );
+      }
+      if (resolveIngestPlan(needs: needs).strategy == IngestStrategy.manifestRelay) {
+        return _open(
+          url: url,
+          urls: urls,
+          headers: headers,
+          nativeOpen: nativeOpen,
+          joinCreationOnCancel: true,
+          createInput: (_) =>
+              _createIngestRelay(url, Map<String, String>.unmodifiable(headers), rootManifest: probe?.body),
+        );
+      }
+    }
+    if (policy == null &&
+        renewFlv != null &&
+        !FlvLegacyHevcRelay.appliesTo(url) &&
+        FlvSpliceRelay.appliesTo(url, refreshAt: refreshAt)) {
+      return _open(
+        url: url,
+        urls: urls,
+        headers: headers,
+        nativeOpen: nativeOpen,
+        joinCreationOnCancel: true,
+        createInput: (_) => _createSpliceRelay(url, Map<String, String>.unmodifiable(headers), refreshAt!, renewFlv),
+      );
+    }
+    if (policy == null && rewriteLegacyHevcFlv && FlvLegacyHevcRelay.appliesTo(url) && ingestFfmpegAvailable) {
+      // libmpv's FFmpeg cannot parse codec-id-12 HEVC FLV. Instead of rewriting
+      // FLV tags in Dart, let FFmpeg remux it into a local HLS tree the player
+      // can read; the tag rewriter is only kept for hosts without a runtime.
+      return _open(
+        url: url,
+        urls: urls,
+        headers: headers,
+        nativeOpen: nativeOpen,
+        joinCreationOnCancel: true,
+        createInput: (_) => _createFfmpegRelay(url, Map<String, String>.unmodifiable(headers)),
+      );
+    }
+    if (policy == null && rewriteLegacyHevcFlv && FlvLegacyHevcRelay.appliesTo(url)) {
+      return _open(
+        url: url,
+        urls: urls,
+        headers: headers,
+        nativeOpen: nativeOpen,
+        joinCreationOnCancel: true,
+        createInput: (_) => _createLegacyHevcRelay(url, Map<String, String>.unmodifiable(headers)),
+      );
+    }
+    if (policy != null && legacyFactory == null && sourceIsManifest) {
+      // An HLS source with a query-token policy goes through the same ingest
+      // relay as a rewritten manifest: the policy is applied to the *upstream*
+      // child requests, so the player only ever sees absolute loopback URLs.
+      return _open(
+        url: url,
+        urls: urls,
+        headers: headers,
+        nativeOpen: nativeOpen,
+        joinCreationOnCancel: true,
+        createInput: (_) => _createIngestRelay(
+          url,
+          Map<String, String>.unmodifiable(headers),
+          childUriPolicy: policy.apply,
+          sessionCookies: true,
+          matchesPolicy: policy,
+        ),
+      );
+    }
+    return _open(
+      url: url,
+      urls: urls,
+      headers: headers,
+      nativeOpen: nativeOpen,
+      // Old injected factories have no cancellation contract; preserve their
+      // late-result ownership without making close wait for arbitrary futures.
+      joinCreationOnCancel: legacyFactory == null,
+      createInput: policy == null
+          ? null
+          : (_) {
+              final source = Uri.tryParse(url);
+              if (source == null || !policy.matchesSource(source)) {
+                throw const FormatException('Playback query policy does not match selected input');
+              }
+              return (legacyFactory ?? _createRelay)(url, Map<String, String>.unmodifiable(headers), policy);
+            },
+    );
+  }
+
+  /// No placeholder URL, raw cookies or signed websocket are sent to native.
+  /// Metadata/seat acquisition happens inside this same source transaction.
+  Future<void> openOwned({required PlaybackOwnedInputFactory createInput, required PlaybackNativeOpen nativeOpen}) =>
+      _open(createInput: createInput, joinCreationOnCancel: true, nativeOpen: nativeOpen);
+
+  Future<void> _open({
+    String? url,
+    List<String> urls = const [],
+    Map<String, String> headers = const {},
+    required PlaybackOwnedInputFactory? createInput,
+    required bool joinCreationOnCancel,
+    required PlaybackNativeOpen nativeOpen,
+  }) async {
+    if (_closed) throw StateError('Playback input owner is closed');
+    final generation = ++_generation;
+    PlaybackInputLease? input;
+    bool current() => !_closed && generation == _generation;
+    try {
+      if (_creating.isNotEmpty || _pending.isNotEmpty || _retiring.isNotEmpty) await _cancelPendingResources();
+      if (!current()) throw StateError('Playback input transaction was retired');
+      if (createInput != null) {
+        input = await _acquire(createInput, current, joinOnCancel: joinCreationOnCancel);
+      }
+      if (!current() || input?.isUsable == false) throw StateError('Playback input transaction was retired');
+      final local = input?.uri.toString();
+      await nativeOpen(
+        local ?? url!,
+        local == null ? urls : [local],
+        local == null ? headers : const {},
+        input != null,
+      );
+      if (!current() || input?.isUsable == false) throw StateError('Playback input transaction was retired');
+      final previous = _active;
+      _active = input;
+      _pending.remove(input);
+      input = null;
+      if (previous != null) await _retire(previous);
+    } catch (_) {
+      _pending.remove(input);
+      if (input != null) await _retire(input);
+      rethrow;
+    }
+  }
+
+  Future<PlaybackInputLease> _acquire(
+    PlaybackOwnedInputFactory factory,
+    bool Function() current, {
+    required bool joinOnCancel,
+  }) async {
+    final creation = _PlaybackInputCreation(joinOnCancel);
+    _creating.add(creation);
+    try {
+      final input = await factory(creation.cancel);
+      _pending.add(input);
+      if (!current() || creation.cancel.isCancelled) {
+        _pending.remove(input);
+        await _retire(input);
+        creation.settled.complete();
+        throw StateError('Playback input transaction was retired');
+      }
+      creation.settled.complete();
+      return input;
+    } catch (error, stack) {
+      if (!creation.settled.isCompleted) {
+        if (creation.cancel.isCancelled && identical(error, creation.cancel.cancelError)) {
+          creation.settled.complete();
+        } else {
+          creation.settled.completeError(error, stack);
+        }
+      }
+      rethrow;
+    } finally {
+      _creating.remove(creation);
+    }
+  }
+
+  /// Cancel only the pending replacement, retaining the previous input until
+  /// its native owner is replaced or disposed. A late factory result is closed
+  /// by open() without invoking nativeOpen; never await an unbounded native open.
+  Future<void> cancelPending() async {
+    _generation++;
+    await _cancelPendingResources();
+  }
+
+  Future<void> _cancelPendingResources() async {
+    final creating = _creating.toList();
+    for (final creation in creating) {
+      creation.cancel.cancel();
+    }
+    final pending = _pending.toList();
+    _pending.clear();
+    await Future.wait([
+      ...pending.map(_retire),
+      ..._retiring.map((input) => input.close()),
+      for (final creation in creating)
+        if (creation.joinOnCancel) creation.settled.future,
+    ]);
+  }
+
+  Future<void> _retire(PlaybackInputLease input) async {
+    _retiring.add(input);
+    try {
+      await input.close();
+    } finally {
+      _retiring.remove(input);
+    }
+  }
+
+  Future<void> close() => _closing ??= _close();
+  Future<void> _close() async {
+    _closed = true;
+    final active = _active;
+    _active = null;
+    final pending = cancelPending();
+    final activeClose = active == null ? Future<void>.value() : _retire(active);
+    // A dispatch-time cancellation may already be retiring a native input.
+    // Teardown still joins that cleanup instead of merely observing an empty
+    // pending set and declaring the owner closed early.
+    await Future.wait([pending, activeClose, ..._retiring.map((input) => input.close())]);
+  }
+}

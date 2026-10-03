@@ -1,0 +1,61 @@
+# 上游 pubspec.yaml 把 media_core 的 15 个包和 flame_barrage 写成了作者 Windows
+# 机器上的绝对路径（F:/media_core、E:/software/flame_barrage），别的机器上不存在。
+# 这里把它们改指到与本仓库同级的克隆，构建前需先克隆好：
+#   ../media_core      <- https://github.com/liuchuancong/media_core  (main)
+#   ../flame_barrage   <- https://github.com/liuchuancong/flame_barrage (main)
+#
+# 注意：本文件的 dependency_overrides 会整体替换（不是合并）pubspec.yaml 里的同名
+# 段，所以第一段原样照抄了 pubspec.yaml 的 override；上游改动那一段时这里要同步。
+dependency_overrides:
+  # ---- 照抄 pubspec.yaml 的 dependency_overrides ----
+  wakelock_plus: ^1.7.0
+  _fe_analyzer_shared: 108.0.0
+  analyzer: 14.4.0
+  cli_util: 0.6.0
+  dbus: 0.8.0
+  file_picker_linux: 2.0.1
+  material_color_utilities: 0.13.1
+  nm: 0.6.0
+  source_gen: 4.3.0
+  test_api: 0.7.14
+  flutter_inappwebview_android:
+    path: plugins/built_in_kotlin/flutter_inappwebview_android
+  share_handler_android:
+    path: plugins/built_in_kotlin/share_handler_android
+  hooks: ^2.2.0
+  code_assets: ^2.1.0
+  xml: ^7.0.1
+
+  # ---- 本机路径映射 ----
+  flame_barrage:
+    path: ../flame_barrage
+  media_core:
+    path: ../media_core/packages/media_core
+  media_core_media_kit:
+    path: ../media_core/packages/media_core_media_kit
+  media_core_ui:
+    path: ../media_core/packages/media_core_ui
+  media_core_pip:
+    path: ../media_core/packages/media_core_pip
+  media_core_fullscreen:
+    path: ../media_core/packages/media_core_fullscreen
+  media_core_multiview:
+    path: ../media_core/packages/media_core_multiview
+  media_core_ingest:
+    path: ../media_core/packages/media_core_ingest
+  media_core_presentation:
+    path: ../media_core/packages/media_core_presentation
+  media_core_floating:
+    path: ../media_core/packages/media_core_floating
+  media_core_ijk_player:
+    path: ../media_core/packages/media_core_ijk_player
+  media_core_better_player:
+    path: ../media_core/packages/media_core_better_player
+  media_core_danmaku:
+    path: ../media_core/packages/media_core_danmaku
+  media_core_mediasession:
+    path: ../media_core/packages/media_core_mediasession
+  media_core_live:
+    path: ../media_core/packages/media_core_live
+  media_core_logging:
+    path: ../media_core/packages/media_core_logging
