@@ -927,25 +927,13 @@ class DanmakuViewer extends StatelessWidget {
         barragePoolMaxSize: 72,
         textCacheMaxSize: 320,
       );
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          FlameBarrageWidget(
-            controller: controller.danmakuController,
-            // Video gestures own the full surface and forward only hits on
-            // actual barrage bounds, so volume/brightness/double-tap remain
-            // responsive.
-            enablePointerEvents: false,
-            config: config,
-            emojiAtlas: EmojiAtlas.instance,
-          ),
-          FlameBarrageWidget(
-            controller: controller.selfDanmakuController,
-            enablePointerEvents: false,
-            config: selfDanmakuLayerConfig(config),
-            emojiAtlas: EmojiAtlas.instance,
-          ),
-        ],
+      return FlameBarrageWidget(
+        controller: controller.danmakuController,
+        // Video gestures own the full surface and forward only hits on actual
+        // barrage bounds, so volume/brightness/double-tap remain responsive.
+        enablePointerEvents: false,
+        config: config,
+        emojiAtlas: EmojiAtlas.instance,
       );
     });
   }

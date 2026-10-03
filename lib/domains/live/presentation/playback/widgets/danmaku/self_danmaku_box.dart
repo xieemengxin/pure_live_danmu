@@ -4,8 +4,11 @@ import 'package:flame_barrage/flame_barrage.dart';
 
 /// `BarrageItem.priority` of a danmaku the viewer posted to the platform.
 ///
-/// The engine keys its layout cache on the priority, so the boxed layout of an
-/// own message is never reused for someone else's message with the same text.
+/// A positive priority makes the engine dispatch the message ahead of the
+/// waiting queue: in a busy room an own message queued behind everyone else's
+/// would otherwise show up seconds late, or age out and never show. The engine
+/// also keys its layout cache on the priority, so the boxed layout of an own
+/// message is never reused for someone else's message with the same text.
 const int selfDanmakuPriority = 1;
 
 /// `BarrageItem.fixedDuration` of an own danmaku.
@@ -21,17 +24,6 @@ const Duration selfDanmakuCacheMarker = Duration(microseconds: 4000001);
 /// The engine re-lays out everything on screen when a config carries a
 /// different interceptor list instance, so every surface shares this one.
 const List<BarrageEffectInterceptor> selfDanmakuInterceptors = <BarrageEffectInterceptor>[SelfDanmakuBoxInterceptor()];
-
-/// Config of the layer that shows only the viewer's own danmaku.
-///
-/// The engine's waiting queue is first-in first-out: it admits one message per
-/// emit interval, stops while the screen is at its cap, and drops whatever has
-/// waited too long. In a busy room an own message queued behind everyone
-/// else's therefore shows up seconds late or not at all. On a layer of its own
-/// nothing is ahead of it, and [BarrageConfig.realtimeMode] puts it on screen
-/// on the next frame.
-BarrageConfig selfDanmakuLayerConfig(BarrageConfig main) =>
-    main.copyWith(realtimeMode: true, maxVisibleCount: 12, maxPendingCount: 12);
 
 /// Draws a box around the viewer's own danmaku so it stands out on the video.
 class SelfDanmakuBoxInterceptor extends BarrageEffectInterceptor {

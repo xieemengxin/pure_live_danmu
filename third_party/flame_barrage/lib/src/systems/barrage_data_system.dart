@@ -46,6 +46,14 @@ class BarrageDataSystem extends Component {
 
   final Queue<_PendingBarrage> _waiting = Queue<_PendingBarrage>();
   final Queue<_PendingBarrage> _pausedBuffer = Queue<_PendingBarrage>();
+
+  /// Messages with a positive [BarrageItem.priority] — typically the viewer's
+  /// own. They jump the queue: dispatched ahead of [_waiting] on the next
+  /// logic step, in arrival order among themselves, without the emit pacing,
+  /// the on-screen cap or the age limit. They still take a real lane, so they
+  /// never overlap what is already on screen; when no lane is free they wait
+  /// at the front and get the first one that opens.
+  final Queue<_PendingBarrage> _urgent = Queue<_PendingBarrage>();
   double _emitTimer = 0.0;
   bool _paused = false;
 
@@ -56,8 +64,8 @@ class BarrageDataSystem extends Component {
   /// gallop cadence, meteor angle...). One shared Random: cheap and enough.
   final math.Random _fxRandom = math.Random();
 
-  bool get hasPending => _waiting.isNotEmpty || _pausedBuffer.isNotEmpty;
-  int get pendingCount => _waiting.length + _pausedBuffer.length;
+  bool get hasPending => _urgent.isNotEmpty || _waiting.isNotEmpty || _pausedBuffer.isNotEmpty;
+  int get pendingCount => _urgent.length + _waiting.length + _pausedBuffer.length;
 
   void pause() => _paused = true;
 
@@ -79,6 +87,13 @@ class BarrageDataSystem extends Component {
 
   void pushMessage(BarrageItem item) {
     final pending = _PendingBarrage(item, DateTime.now().millisecondsSinceEpoch);
+    if (item.priority > 0) {
+      // Not counted against maxPendingCount and never evicted by it: a burst
+      // of ordinary messages must not push an urgent one out. The engine does
+      // not step while paused, so these simply wait here until it resumes.
+      _urgent.add(pending);
+      return;
+    }
     final maxPendingCount = _ctx.config.maxPendingCount.clamp(1, 10000);
     while (_waiting.length + _pausedBuffer.length >= maxPendingCount) {
       if (_waiting.isNotEmpty) {
@@ -95,6 +110,7 @@ class BarrageDataSystem extends Component {
   }
 
   void clear() {
+    _urgent.clear();
     _waiting.clear();
     _pausedBuffer.clear();
     _paused = false;
@@ -105,14 +121,20 @@ class BarrageDataSystem extends Component {
   /// buffer) whose item matches [predicate] — the queue half of a host-side
   /// retraction. Returns how many were dropped.
   int retractWhere(bool Function(BarrageItem item) predicate) {
-    final before = _waiting.length + _pausedBuffer.length;
+    final before = pendingCount;
+    _urgent.removeWhere((pending) => predicate(pending.item));
     _waiting.removeWhere((pending) => predicate(pending.item));
     _pausedBuffer.removeWhere((pending) => predicate(pending.item));
-    return before - (_waiting.length + _pausedBuffer.length);
+    return before - pendingCount;
   }
 
   @override
   void update(double dt) {
+    // Urgent messages first, every step, so they win the lanes that are free.
+    if (_urgent.isNotEmpty) {
+      final now = _ctx.clock.nowPrecise();
+      while (_urgent.isNotEmpty && _dispatchFrom(_urgent, now, urgent: true)) {}
+    }
     if (_ctx.config.realtimeMode) {
       // Unthrottled: flush the whole waiting queue every logic frame, still
       // bounded by maxVisibleCount and lane availability. Bursts appear the
@@ -157,15 +179,21 @@ class BarrageDataSystem extends Component {
   /// false when the queue is empty, the screen is at capacity, or no lane
   /// fits — in which case the message stays at the head and retries next
   /// frame.
-  bool _dispatchOne(double now) {
-    final wallNow = DateTime.now().millisecondsSinceEpoch;
-    final maxAgeMs = _ctx.config.maxPendingAge.inMilliseconds.clamp(0, 600000);
-    while (_waiting.isNotEmpty && wallNow - _waiting.first.enqueuedAtMs > maxAgeMs) {
-      _waiting.removeFirst();
+  bool _dispatchOne(double now) => _dispatchFrom(_waiting, now, urgent: false);
+
+  /// Dispatches the head of [queue]. An [urgent] head skips the age limit and
+  /// the on-screen cap; lane allocation is the same for both.
+  bool _dispatchFrom(Queue<_PendingBarrage> queue, double now, {required bool urgent}) {
+    if (!urgent) {
+      final wallNow = DateTime.now().millisecondsSinceEpoch;
+      final maxAgeMs = _ctx.config.maxPendingAge.inMilliseconds.clamp(0, 600000);
+      while (queue.isNotEmpty && wallNow - queue.first.enqueuedAtMs > maxAgeMs) {
+        queue.removeFirst();
+      }
     }
-    if (_waiting.isEmpty) return false;
-    if (_ctx.aliveCount >= _ctx.config.maxVisibleCount) return false;
-    final item = _waiting.first.item;
+    if (queue.isEmpty) return false;
+    if (!urgent && _ctx.aliveCount >= _ctx.config.maxVisibleCount) return false;
+    final item = queue.first.item;
     // BarrageMotionEffect owns the motion of effect messages; the uniform
     // scroll strategy does not apply to them.
     final fxEffect = item.effect;
@@ -191,7 +219,7 @@ class BarrageDataSystem extends Component {
       _ctx.pool.recycle(entry);
       return false;
     }
-    _waiting.removeFirst();
+    queue.removeFirst();
     final track = _ctx.trackManager.tracks[trackIndex];
     if (item.type == BarrageType.scroll && fxEffect == null) {
       entry.speed = _speedStrategy.calculate(entry, _ctx.viewport.x, config, targetTrack: track);

@@ -54,9 +54,6 @@ class PlatformHelper {
 class DanmakuManager {
   final BarrageController controller;
   final BarrageController pipController;
-
-  /// The layer for the viewer's own danmaku; see [selfDanmakuLayerConfig].
-  final BarrageController selfController;
   final List<Worker> workers = [];
   final SettingsService settingsService;
   final VideoController videoController;
@@ -69,7 +66,6 @@ class DanmakuManager {
   DanmakuManager({
     required this.controller,
     required this.pipController,
-    required this.selfController,
     required this.settingsService,
     required this.videoController,
   });
@@ -193,7 +189,7 @@ class DanmakuManager {
     final localStyle = msg.isLocal ? msg.style : null;
     final settings = settingsService.danmaku;
     if (!videoController.hideDanmaku.value) {
-      (msg.isSelf ? selfController : controller).send(
+      controller.send(
         BarrageItem(
           content: msg.message,
           type: switch (localStyle?.placement) {
@@ -307,7 +303,6 @@ class DanmakuManager {
     workers.clear();
     controller.clear();
     pipController.clear();
-    selfController.clear();
   }
 }
 
@@ -469,7 +464,6 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
   bool get _ownsVolume => !_isDisposed && _playerManager.ownsVideoController(this);
   late final BarrageController danmakuController;
   late final BarrageController pipDanmakuController;
-  late final BarrageController selfDanmakuController;
   late final DanmakuManager _danmakuManager;
 
   // Keys
@@ -534,11 +528,9 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
   void _initControllers() {
     danmakuController = BarrageController();
     pipDanmakuController = BarrageController();
-    selfDanmakuController = BarrageController();
     _danmakuManager = DanmakuManager(
       controller: danmakuController,
       pipController: pipDanmakuController,
-      selfController: selfDanmakuController,
       settingsService: _settingsService,
       videoController: this,
     );
@@ -1115,7 +1107,6 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
     pipDanmakuController.resume();
     danmakuController.clear();
     pipDanmakuController.clear();
-    selfDanmakuController.clear();
   }
 
   // EPG管理

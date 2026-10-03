@@ -1,3 +1,9 @@
+## Local changes in pure_live_danmu (on top of 0.0.8, upstream efada9c)
+
+- A message with a positive `priority` jumps the waiting queue: it is
+  dispatched ahead of ordinary messages on the next logic step, without the
+  emit pacing, the on-screen cap or the age limit, and still takes a real lane.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.

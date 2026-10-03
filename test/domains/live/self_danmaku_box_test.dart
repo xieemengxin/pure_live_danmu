@@ -132,38 +132,81 @@ void main() {
       maxPendingCount: 120,
     );
 
-    testWidgets('和别人排同一个队：半秒后前面还有上百条，轮不到它', (tester) async {
+    /// 自己的那条是否已经在屏上：把它撤掉，看屏上少没少一条。
+    bool ownIsOnScreen(BarrageController controller) {
+      final before = controller.activeItemCount;
+      controller.retractWhere((item) => item.priority == selfDanmakuPriority);
+      return controller.activeItemCount == before - 1;
+    }
+
+    testWidgets('前面排着上百条别人的：自己的插队，下一步就上屏', (tester) async {
       final controller = await _pumpEngine(tester, config: busyRoom);
       for (var i = 0; i < 119; i++) {
         controller.send(BarrageItem(content: '别人的弹幕 $i'));
       }
       controller.send(_own);
 
+      await tester.pump(const Duration(milliseconds: 17));
+      await tester.pump(const Duration(milliseconds: 17));
+
+      expect(controller.pendingMessageCount, greaterThanOrEqualTo(115), reason: '别人的照常按节奏排队');
+      expect(ownIsOnScreen(controller), isTrue);
+    });
+
+    testWidgets('没有优先级的同一条消息：半秒后仍排在上百条之后', (tester) async {
+      final controller = await _pumpEngine(tester, config: busyRoom);
+      for (var i = 0; i < 119; i++) {
+        controller.send(BarrageItem(content: '别人的弹幕 $i'));
+      }
+      controller.send(const BarrageItem(content: '排队的那条', fixedDuration: selfDanmakuCacheMarker));
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 50));
       }
 
       expect(controller.activeItemCount, lessThanOrEqualTo(11), reason: '先进先出，每 0.05 秒才放一条');
-      expect(controller.pendingMessageCount, greaterThanOrEqualTo(100), reason: '自己的那条还排在队尾');
+      expect(controller.pendingMessageCount, greaterThanOrEqualTo(100));
     });
 
-    testWidgets('走单独一层：前面没有别人，下一帧就上屏', (tester) async {
-      final controller = await _pumpEngine(tester, config: selfDanmakuLayerConfig(busyRoom));
+    testWidgets('屏上已到同屏上限：自己的仍然上屏', (tester) async {
+      final controller = await _pumpEngine(tester, config: busyRoom.copyWith(maxVisibleCount: 2, realtimeMode: true));
+      controller
+        ..send(const BarrageItem(content: '别人一'))
+        ..send(const BarrageItem(content: '别人二'))
+        ..send(const BarrageItem(content: '别人三'));
+      await tester.pump(const Duration(milliseconds: 17));
+      await tester.pump(const Duration(milliseconds: 17));
+      expect(controller.activeItemCount, 2, reason: '普通弹幕受同屏上限约束');
+
       controller.send(_own);
-
       await tester.pump(const Duration(milliseconds: 17));
-      await tester.pump(const Duration(milliseconds: 17));
-
-      expect(controller.activeItemCount, 1);
-      expect(controller.pendingMessageCount, 0);
+      expect(controller.activeItemCount, 3);
+      expect(ownIsOnScreen(controller), isTrue);
     });
 
-    test('单独一层沿用主画面的样式，只改排队方式', () {
-      final layer = selfDanmakuLayerConfig(busyRoom.copyWith(fontSize: 22, baseSpeed: 160));
-      expect(layer.fontSize, 22);
-      expect(layer.baseSpeed, 160);
-      expect(layer.realtimeMode, isTrue);
-      expect(identical(layer.effectInterceptors, selfDanmakuInterceptors), isTrue, reason: '方框仍然生效');
+    testWidgets('所有轨道都刚被占住：自己的等到有轨道空出来再上，不和别人叠在一起', (tester) async {
+      // 400 高、轨道高 100：四条轨道。
+      final controller = await _pumpEngine(
+        tester,
+        config: busyRoom.copyWith(realtimeMode: true, trackHeight: 100, baseSpeed: 200, fontSize: 20),
+      );
+      for (var i = 0; i < 4; i++) {
+        controller.send(BarrageItem(content: '把这一条轨道的入口占住的一条长弹幕 $i'));
+      }
+      await tester.pump(const Duration(milliseconds: 17));
+      await tester.pump(const Duration(milliseconds: 17));
+      expect(controller.activeItemCount, 4);
+
+      controller.send(_own);
+      await tester.pump(const Duration(milliseconds: 17));
+      expect(controller.activeItemCount, 4, reason: '没有空轨道时不硬塞');
+      expect(controller.pendingMessageCount, 1);
+
+      // 前面的弹幕滚进去、让出入口之后，自己的拿到第一条空出来的轨道。
+      for (var i = 0; i < 80 && controller.pendingMessageCount > 0; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      expect(controller.pendingMessageCount, 0);
+      expect(ownIsOnScreen(controller), isTrue);
     });
   });
 }
