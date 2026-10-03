@@ -820,7 +820,7 @@ packages:
   flame_barrage:
     dependency: "direct main"
     description:
-      path: "../flame_barrage"
+      path: "third_party/flame_barrage"
       relative: true
     source: path
     version: "0.0.8"

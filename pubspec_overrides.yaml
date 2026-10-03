@@ -1,8 +1,11 @@
 # 上游 pubspec.yaml 把 media_core 的 15 个包和 flame_barrage 写成了作者 Windows
 # 机器上的绝对路径（F:/media_core、E:/software/flame_barrage），别的机器上不存在。
-# 这里把它们改指到与本仓库同级的克隆，构建前需先克隆好：
-#   ../media_core      <- https://github.com/liuchuancong/media_core  (main)
-#   ../flame_barrage   <- https://github.com/liuchuancong/flame_barrage (main)
+# 这里改指到本机能找到的位置：
+#   ../media_core               <- https://github.com/liuchuancong/media_core (main)，
+#                                  与本仓库同级的克隆，构建前需先克隆好
+#   third_party/flame_barrage   <- 仓库内的一份弹幕引擎源码，取自
+#                                  https://github.com/liuchuancong/flame_barrage main
+#                                  efada9c，在其上有本仓库自己的修改（优先级插队）
 #
 # 注意：本文件的 dependency_overrides 会整体替换（不是合并）pubspec.yaml 里的同名
 # 段，所以第一段原样照抄了 pubspec.yaml 的 override；上游改动那一段时这里要同步。
@@ -28,7 +31,7 @@ dependency_overrides:
 
   # ---- 本机路径映射 ----
   flame_barrage:
-    path: ../flame_barrage
+    path: third_party/flame_barrage
   media_core:
     path: ../media_core/packages/media_core
   media_core_media_kit:
