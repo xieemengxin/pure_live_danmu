@@ -13,7 +13,8 @@ import 'package:pure_live/services/danmaku_settings/danmaku_settings_model.dart'
 /// * `fps` follows the panel's refresh rate (see [resolveDanmakuFps]): the engine
 ///   integrates scroll positions against real elapsed time, so a lower `fps`
 ///   only costs smoothness, never speed — but a step budget above the panel's
-///   refresh rate is wasted work.
+///   refresh rate is wasted work. The engine is handed that budget with a
+///   little headroom ([danmakuEngineFps]) so its throttle steps evenly.
 /// * `rasterizeItems` stays on: each message is rasterized once and every frame
 ///   then blits one textured quad, instead of re-running its text and stroke
 ///   ops on every frame. This is the single biggest win on TV hardware.
@@ -59,7 +60,7 @@ BarrageConfig buildDanmakuConfig(
     strokeWidth: settings.danmakuFontBorder.clamp(0, 8),
     showStroke: settings.enableDanmakuStroke,
     noEmojiMode: settings.noEmojiMode,
-    fps: resolveDanmakuFps(settings, refreshRate: refreshRate),
+    fps: danmakuEngineFps(resolveDanmakuFps(settings, refreshRate: refreshRate)),
     // User override first; otherwise the device budget — a weak GPU affords
     // fewer bitmap blits per frame than a box with headroom. `0` means "auto".
     maxVisibleCount: settings.danmakuMaxVisibleCount > 0
@@ -84,6 +85,24 @@ BarrageConfig buildDanmakuConfig(
     letterSpacing: settings.danmakuLetterSpacing,
   );
 }
+
+/// Converts a frame budget into the `fps` handed to the barrage engine.
+///
+/// The engine throttles logic steps with `accumulated < 1 / fps`, and Flame
+/// reports frame time in whole microseconds. A budget equal to the panel's
+/// refresh rate — exactly what auto mode asks for — sits on that boundary: on a
+/// 60 Hz TV a 16666 µs frame is shorter than 1/60 s, the step is skipped, and
+/// the next frame moves twice as far. The layer still repaints every display
+/// frame, so the held frame plus the double jump reads as stutter; the low-end
+/// budget of 30 on a 60 Hz panel steps on every third frame instead of every
+/// second.
+///
+/// Lifting the budget a few percent moves the threshold off the boundary, so
+/// steps land evenly on every k-th display frame. The engine clamps `fps` to
+/// 240, which leaves budgets above ~226 without headroom.
+int danmakuEngineFps(int budget) => (budget * _boundaryHeadroom).ceil();
+
+const double _boundaryHeadroom = 1.06;
 
 /// The frame budget the engine dispatches against.
 ///

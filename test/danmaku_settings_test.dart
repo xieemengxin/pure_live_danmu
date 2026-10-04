@@ -75,7 +75,8 @@ void main() {
       expect(config.strokeWidth, 3);
       expect(config.showStroke, isFalse);
       expect(config.noEmojiMode, isTrue);
-      expect(config.fps, 90);
+      // The engine gets the budget with headroom, so its throttle steps evenly.
+      expect(config.fps, danmakuEngineFps(90));
       expect(config.fontFamily, 'SourceHanSans');
       // The derived metrics move with the font size, and the caps stay in place.
       expect(config.trackHeight, closeTo(27 * 1.55, 0.001));

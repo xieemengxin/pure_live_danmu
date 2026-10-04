@@ -1,0 +1,34 @@
+# 上游 pubspec.yaml 把 media_core 的 8 个包写成了作者 Windows 机器上的绝对路径
+# （F:/media_core），别的机器上不存在。这里改指到与本仓库同级的克隆，构建前需先
+# 克隆好：
+#   ../media_core   <- https://github.com/liuchuancong/media_core (main)
+#
+# 注意：本文件的 dependency_overrides 会整体替换（不是合并）pubspec.yaml 里的同名
+# 段，所以第一段原样照抄了 pubspec.yaml 的 override；上游改动那一段时这里要同步。
+dependency_overrides:
+  # ---- 照抄 pubspec.yaml 的 dependency_overrides ----
+  flutter_inappwebview_android:
+    path: plugins/built_in_kotlin/flutter_inappwebview_android
+  android_tv_text_field:
+    path: plugins/built_in_kotlin/android_tv_text_field
+  wakelock_plus: ^1.4.0
+  mime: ^2.1.0
+  equatable: ^3.0.0
+
+  # ---- 本机路径映射 ----
+  media_core:
+    path: ../media_core/packages/media_core
+  media_core_media_kit:
+    path: ../media_core/packages/media_core_media_kit
+  media_core_fvp:
+    path: ../media_core/packages/media_core_fvp
+  media_core_live:
+    path: ../media_core/packages/media_core_live
+  media_core_native:
+    path: ../media_core/packages/media_core_native
+  media_core_logging:
+    path: ../media_core/packages/media_core_logging
+  media_core_better_player:
+    path: ../media_core/packages/media_core_better_player
+  media_core_ijk_player:
+    path: ../media_core/packages/media_core_ijk_player
