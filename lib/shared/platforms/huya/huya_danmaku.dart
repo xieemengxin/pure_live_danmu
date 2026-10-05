@@ -218,8 +218,9 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
   @override
   LiveDanmakuSendBlock? get sendBlock => _viewerCredentials() == null ? LiveDanmakuSendBlock.loginRequired : null;
 
+  /// 虎牙网页端输入框的上限。
   @override
-  int get maxSendLength => 20;
+  int get maxSendLength => 30;
 
   @override
   Future<void> sendMessage(String text) async {
@@ -274,17 +275,12 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
   void _completeSend(HuyaWupReply reply) {
     final completer = _pendingSends.remove(reply.requestId);
     if (completer == null || completer.isCompleted) return;
-    if (reply.code == 0) {
+    final refusal = reply.sendRefusal;
+    if (refusal == null) {
       completer.complete();
       return;
     }
-    completer.completeError(
-      LiveDanmakuSendException(
-        reply.code == huyaSendMessageInvalidSession
-            ? '发送失败：登录状态无效，请重新登录虎牙（错误码 ${reply.code}）'
-            : '发送失败（虎牙错误码 ${reply.code}）',
-      ),
-    );
+    completer.completeError(LiveDanmakuSendException(refusal));
   }
 
   void _failPendingSends(String message) {

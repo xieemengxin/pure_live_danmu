@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pure_live/core/tars/codec/tars_input_stream.dart';
 import 'package:pure_live/core/tars/codec/tars_output_stream.dart';
+import 'package:pure_live/core/tars/codec/tars_struct.dart';
 import 'package:pure_live/core/tars/tup/tars_uni_packet.dart';
 import 'package:pure_live/shared/platforms/huya/huya_send_message.dart';
 
@@ -28,6 +29,46 @@ const String _referenceWsUrl =
 final String _cookie = 'yyuid=$_uid; guid=$_guid; udb_passdata=3; udb_biztoken=${'x' * 300}';
 
 HuyaViewerCredentials _viewer() => HuyaViewerCredentials.fromCookie(_cookie, fallbackGuid: 'unused')!;
+
+/// 回应体里的 `tNotice`：服务端落地的那条消息，这里只写发送者和内容。
+class _Notice extends TarsStruct {
+  _Notice(this.content);
+  final String content;
+
+  @override
+  void writeTo(TarsOutputStream os) {
+    os.write(_uid, 1);
+    os.write(content, 3);
+  }
+
+  @override
+  void readFrom(TarsInputStream inputStream) {}
+  @override
+  Object deepCopy() => _Notice(content);
+  @override
+  void displayAsString(StringBuffer sb, int level) {}
+}
+
+/// 线上 `SendMessageRsp` 的三个字段：iStatus、tNotice、sToast。
+class _SendMessageRsp extends TarsStruct {
+  _SendMessageRsp({this.status = 0, this.toast = ''});
+  final int status;
+  final String toast;
+
+  @override
+  void writeTo(TarsOutputStream os) {
+    os.write(status, 0);
+    os.write(_Notice(_content), 1);
+    os.write(toast, 2);
+  }
+
+  @override
+  void readFrom(TarsInputStream inputStream) {}
+  @override
+  Object deepCopy() => _SendMessageRsp(status: status, toast: toast);
+  @override
+  void displayAsString(StringBuffer sb, int level) {}
+}
 
 Uint8List _command({int subSid = 0}) => buildHuyaSendMessageCommand(
   viewer: _viewer(),
@@ -135,7 +176,7 @@ void main() {
       final wup = reply(
         requestId: 78,
         status: {'STATUS_RESULT_DESC': 'wup request biz execption:905'},
-        returned: huyaSendMessageInvalidSession,
+        returned: huyaSendMessageUnverifiedAccount,
       );
       // 线上实测这份返回值的字节是 01 03 89。
       expect((TarsUniPacket()..decode(wup)).newData[''], <int>[0x01, 0x03, 0x89]);
@@ -147,6 +188,57 @@ void main() {
 
     test('tars 调用本身失败时用状态里的结果码', () {
       expect(parseHuyaWupReply(reply(requestId: 79, status: {'STATUS_RESULT_CODE': '-2'})).code, -2);
+    });
+
+    // 线上的回应在空键的返回值之外还带一个 `tRsp` 结构体（成功时实测就是这个形状）。
+    Uint8List replyWithBody({int returned = 0, int status = 0, String toast = ''}) {
+      final packet = TarsUniPacket()
+        ..setTarsVersion(3)
+        ..requestId = 80
+        ..servantName = 'liveui'
+        ..funcName = 'sendMessage'
+        ..put('tRsp', _SendMessageRsp(status: status, toast: toast));
+      packet.newData[''] = (TarsOutputStream()..write(returned, 0)).toUint8List();
+      return packet.encode();
+    }
+
+    test('线上成功的回应：返回值 0，结构体里状态 0、没有提示', () {
+      final parsed = parseHuyaWupReply(replyWithBody());
+      expect(parsed.code, 0);
+      expect(parsed.status, 0);
+      expect(parsed.toast, isEmpty);
+      expect(parsed.sendRefusal, isNull);
+    });
+
+    // 成败的判定照虎牙网页端：看结构体里的状态和提示，不只看返回值。
+    test('返回值是 0，但结构体里状态不为 0 且带提示：被拒，把提示告诉观众', () {
+      final parsed = parseHuyaWupReply(replyWithBody(status: 2, toast: '发言太快了，休息一下吧'));
+      expect(parsed.code, 0);
+      expect(parsed.status, 2);
+      expect(parsed.sendRefusal, contains('发言太快了，休息一下吧'));
+    });
+
+    test('状态不为 0 但没有提示文字：网页端按成功处理，这里也一样', () {
+      expect(parseHuyaWupReply(replyWithBody(status: 3)).sendRefusal, isNull);
+    });
+
+    test('905 不管出现在返回值还是结构体里，都提示绑定手机或重新登录', () {
+      for (final parsed in [
+        parseHuyaWupReply(reply(requestId: 81, returned: huyaSendMessageUnverifiedAccount)),
+        parseHuyaWupReply(replyWithBody(status: huyaSendMessageUnverifiedAccount, toast: '请先绑定手机')),
+      ]) {
+        expect(parsed.sendRefusal, allOf(contains('绑定手机'), contains('重新登录'), contains('905')));
+      }
+    });
+
+    test('其它非 0 返回值：被拒，带上错误码', () {
+      expect(parseHuyaWupReply(reply(requestId: 82, returned: 1234)).sendRefusal, contains('1234'));
+    });
+
+    test('tRsp 不是结构体时只看返回值', () {
+      final parsed = parseHuyaWupReply(reply(requestId: 83, returned: 0));
+      expect(parsed.status, 0);
+      expect(parsed.sendRefusal, isNull);
     });
 
     test('不是 WUP 包就抛错，由调用方忽略这一帧', () {

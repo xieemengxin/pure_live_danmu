@@ -98,22 +98,44 @@ Uint8List buildHuyaSendMessageCommand({
 
 /// 服务端对一次 WUP 请求的回应（`EWSCmd_WupRsp` = 4）。
 class HuyaWupReply {
-  const HuyaWupReply({required this.requestId, required this.code});
+  const HuyaWupReply({required this.requestId, required this.code, this.status = 0, this.toast = ''});
 
   final int requestId;
 
-  /// 0 表示成功，其余是虎牙的错误码。
+  /// 函数的返回值（tars 调用本身失败时是它的结果码）；0 表示调用成功。
   final int code;
+
+  /// 回应体 `SendMessageRsp.iStatus`；回应里没有回应体时为 0。
+  final int status;
+
+  /// 回应体 `SendMessageRsp.sToast`：虎牙给观众看的拒绝原因，没有时为空。
+  final String toast;
+
+  /// 这条弹幕没发出去时给观众的说明，发出去了为 null。
+  ///
+  /// 判定照虎牙网页端：回应体里状态不为 0 且带提示文字就是被拒，提示原样给观众；
+  /// 状态不为 0 但没有提示，网页端按成功处理。返回值不为 0 时回应里可能根本没有
+  /// 回应体（线上对无效登录态就是这样），同样算被拒。
+  String? get sendRefusal {
+    if (code == huyaSendMessageUnverifiedAccount || status == huyaSendMessageUnverifiedAccount) {
+      return '发送失败：虎牙要求账号绑定手机，或登录状态已失效，请在虎牙确认后重新登录'
+          '（错误码 $huyaSendMessageUnverifiedAccount）';
+    }
+    if (status != 0 && toast.isNotEmpty) return '发送失败：$toast';
+    if (code != 0) return '发送失败（虎牙错误码 $code）';
+    return null;
+  }
 }
 
-/// 登录态无效时 `sendMessage` 的返回值（用不带会话令牌的 cookie 对线上实测得到）。
-const int huyaSendMessageInvalidSession = 905;
+/// 虎牙不认这个账号发言时的状态。网页端收到它会引导观众绑定手机；用不带会话令牌的
+/// cookie 对线上实测，返回值也是它（那时回应里没有回应体）。
+const int huyaSendMessageUnverifiedAccount = 905;
 
 /// 解出 `EWSCmd_WupRsp` 帧里的 WUP 包；[wup] 是帧的 tag 1 字节。
 ///
-/// tars 状态里的结果码只说明这次调用有没有送到服务；业务上成没成是函数的返回值，
-/// 放在空键下。线上对无效登录态的回应就是状态码缺省（按 0 算）、返回值 905，只看
-/// 状态码会把被拒的发送当成成功。
+/// tars 状态里的结果码只说明这次调用有没有送到服务；业务上成没成是函数的返回值
+/// （空键下）和回应体 `tRsp` 里的状态。线上成功的回应两样都有；对无效登录态的回应
+/// 是状态码缺省（按 0 算）、返回值 905、没有回应体。
 HuyaWupReply parseHuyaWupReply(Uint8List wup) {
   final packet = TarsUniPacket()..decode(wup);
   var code = packet.getTarsResultCode();
@@ -122,7 +144,46 @@ HuyaWupReply parseHuyaWupReply(Uint8List wup) {
     final value = TarsInputStream(returned).read(0, 0, false);
     if (value is int) code = value;
   }
-  return HuyaWupReply(requestId: packet.requestId, code: code);
+  var status = 0;
+  var toast = '';
+  final body = packet.newData['tRsp'];
+  if (body != null) {
+    try {
+      final rsp = TarsInputStream(body).readTarsStruct(HYSendMessageRsp(), 0, false) as HYSendMessageRsp;
+      status = rsp.iStatus;
+      toast = rsp.sToast.trim();
+    } catch (_) {
+      // 回应体不是 SendMessageRsp：只看返回值。
+    }
+  }
+  return HuyaWupReply(requestId: packet.requestId, code: code, status: status, toast: toast);
+}
+
+/// `liveui.sendMessage` 的回应体。tag 1 是服务端落地的那条消息（`tNotice`），这里
+/// 用不到，不读。
+class HYSendMessageRsp extends TarsStruct {
+  int iStatus = 0;
+  String sToast = '';
+
+  @override
+  void writeTo(TarsOutputStream _os) {
+    _os.write(iStatus, 0);
+    _os.write(sToast, 2);
+  }
+
+  @override
+  void readFrom(TarsInputStream _is) {
+    iStatus = _is.read(iStatus, 0, false);
+    sToast = _is.read(sToast, 2, false);
+  }
+
+  @override
+  Object deepCopy() => HYSendMessageRsp()
+    ..iStatus = iStatus
+    ..sToast = sToast;
+
+  @override
+  void displayAsString(StringBuffer sb, int level) {}
 }
 
 class HYContentFormat extends TarsStruct {

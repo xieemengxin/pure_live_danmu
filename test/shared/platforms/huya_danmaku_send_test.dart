@@ -120,14 +120,36 @@ Uint8List _chatPush({required int senderUid, required String content}) {
   return frame.toUint8List();
 }
 
+/// 回应体 `SendMessageRsp`：iStatus、tNotice（这里留空）、sToast。
+class _SendMessageRsp extends TarsStruct {
+  _SendMessageRsp(this.status, this.toast);
+  final int status;
+  final String toast;
+
+  @override
+  void writeTo(TarsOutputStream os) {
+    os.write(status, 0);
+    os.write(_BulletFormat(), 1);
+    os.write(toast, 2);
+  }
+
+  @override
+  void readFrom(TarsInputStream inputStream) {}
+  @override
+  Object deepCopy() => _SendMessageRsp(status, toast);
+  @override
+  void displayAsString(StringBuffer sb, int level) {}
+}
+
 /// 服务端对某条 `sendMessage` 的回应（外层命令 4）；[returned] 是函数返回值，0 为成功。
-Uint8List _sendReply({required int requestId, int returned = 0}) {
+/// [status] / [toast] 是回应体里的状态和给观众看的提示。
+Uint8List _sendReply({required int requestId, int returned = 0, int status = 0, String toast = ''}) {
   final packet = TarsUniPacket()
     ..setTarsVersion(3)
     ..requestId = requestId
     ..servantName = 'liveui'
     ..funcName = 'sendMessage'
-    ..put('tRsp', 0);
+    ..put('tRsp', _SendMessageRsp(status, toast));
   packet.newData[''] = (TarsOutputStream()..write(returned, 0)).toUint8List();
   final frame = TarsOutputStream()
     ..write(4, 0)
@@ -242,6 +264,23 @@ void main() {
     );
     channels.single.incoming.add(_sendReply(requestId: sent.requestId, returned: 1234));
     await rejected;
+  });
+
+  test('虎牙拒绝并给出原因（返回值仍是 0）：发送失败，把原因告诉观众', () async {
+    await enterRoom();
+    final sending = danmaku.sendMessage('说得太快');
+    await _settle();
+    final sent = _decodeSendRequest(channels.single.sendRequests.single);
+    final rejected = expectLater(
+      sending,
+      throwsA(isA<LiveDanmakuSendException>().having((e) => e.message, 'message', contains('发言太快了'))),
+    );
+    channels.single.incoming.add(_sendReply(requestId: sent.requestId, status: 2, toast: '发言太快了'));
+    await rejected;
+  });
+
+  test('长度上限与虎牙网页端一致', () {
+    expect(danmaku.maxSendLength, 30);
   });
 
   test('服务端没有回应：到时按已发出处理', () async {
