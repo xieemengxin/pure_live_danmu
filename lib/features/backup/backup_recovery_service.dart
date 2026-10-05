@@ -5,12 +5,27 @@ import '../../core/platform/file_utils.dart';
 
 import 'package:pure_live/core/index.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:date_format/date_format.dart' hide S;
 import 'package:pure_live/core/network/http_client.dart';
 import 'package:pure_live/features/backup/backup_controller.dart';
 import 'package:pure_live/features/backup/backup_section_picker.dart';
 
 class BackupRecoveryService {
+  /// iOS hands over a picked folder as a security-scoped URL, and the directory
+  /// picker returns its bare path without opening that scope, so writing into
+  /// it with dart:io is refused. There a backup goes through the system export
+  /// panel, which copies the document to the place the viewer picks.
+  @visibleForTesting
+  static bool savesThroughExportPanel(TargetPlatform platform) => platform == TargetPlatform.iOS;
+
+  /// Returns whether the document was saved; false when the panel was dismissed.
+  @visibleForTesting
+  static Future<bool> exportBackupDocument({required String fileName, required String content}) async {
+    final saved = await FilePicker.saveFile(fileName: fileName, bytes: utf8.encode(content), mimeType: 'text/plain');
+    return saved != null;
+  }
+
   Future<String?> createAppSettingsBackup(String backupDirectory) async {
     final backup = Get.find<BackupController>();
     // 先勾模块再选目录：取消勾选不该先弹一个系统目录框。
@@ -26,13 +41,26 @@ class BackupRecoveryService {
       return null;
     }
 
+    final dateStr = formatDate(DateTime.now(), [yyyy, '-', mm, '-', dd, 'T', HH, '_', nn, '_', ss]);
+    final fileName = 'purelive_$dateStr.txt';
+
+    if (savesThroughExportPanel(defaultTargetPlatform)) {
+      // No directory is remembered: the path of a folder picked here cannot be
+      // written to again.
+      final saved = await exportBackupDocument(
+        fileName: fileName,
+        content: backup.encodeBackup(sections: sections),
+      );
+      if (saved) ToastUtil.show(i18n("create_backup_success"));
+      return null;
+    }
+
     String? selectedDirectory = await FilePicker.getDirectoryPath(
       initialDirectory: backupDirectory.isEmpty ? null : backupDirectory,
     );
     if (selectedDirectory == null) return null;
 
-    final dateStr = formatDate(DateTime.now(), [yyyy, '-', mm, '-', dd, 'T', HH, '_', nn, '_', ss]);
-    final file = File('$selectedDirectory/purelive_$dateStr.txt');
+    final file = File('$selectedDirectory/$fileName');
 
     if (await backup.backup(file, sections: sections)) {
       if (backup.backupDirectory.v.isEmpty) {

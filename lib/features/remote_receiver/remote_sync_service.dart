@@ -36,7 +36,9 @@ class RemoteSyncService extends GetxController {
   // Internal
   // ---------------------------------------------------------------------------
 
-  static const String _mdnsServiceType = '_purelive-sync._tcp';
+  /// The Bonjour type devices advertise and browse. iOS refuses both for a
+  /// type that `NSBonjourServices` in ios/Runner/Info.plist does not list.
+  static const String mdnsServiceType = '_purelive-sync._tcp';
 
   final Set<String> _localIps = <String>{};
 
@@ -681,7 +683,7 @@ class RemoteSyncService extends GetxController {
         } catch (_) {}
       }
 
-      final discovery = BonsoirDiscovery(type: _mdnsServiceType);
+      final discovery = BonsoirDiscovery(type: mdnsServiceType);
 
       _discovery = discovery;
 
@@ -924,7 +926,7 @@ class RemoteSyncService extends GetxController {
 
     final service = BonsoirService(
       name: broadcastName,
-      type: _mdnsServiceType,
+      type: mdnsServiceType,
       port: localPort.value,
       attributes: {'id': _deviceId, 'name': deviceName, 'platform': platform, 'version': version, 'ip': localIp.value},
     );

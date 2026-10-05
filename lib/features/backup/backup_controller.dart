@@ -406,6 +406,12 @@ class BackupController extends GetxController {
     return _writeBackup(file, exportAllSettings(sections: sections));
   }
 
+  /// The backup document [backup] writes, for a destination that is not a
+  /// path this process can write to.
+  String encodeBackup({Iterable<String>? sections}) => _encodeBackup(exportAllSettings(sections: sections));
+
+  static String _encodeBackup(Map<String, dynamic> data) => const JsonEncoder.withIndent('  ').convert(data);
+
   Future<bool> _writeBackup(File file, Map<String, dynamic> data) async {
     final staged = File('${file.path}.part');
     final previous = File('${file.path}.previous');
@@ -421,7 +427,7 @@ class BackupController extends GetxController {
         }
       }
       if (await staged.exists()) await staged.delete();
-      await staged.writeAsString(const JsonEncoder.withIndent('  ').convert(data), flush: true);
+      await staged.writeAsString(_encodeBackup(data), flush: true);
 
       final hadPrevious = await file.exists();
       if (hadPrevious) await file.rename(previous.path);

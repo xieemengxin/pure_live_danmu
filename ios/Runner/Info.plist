@@ -57,6 +57,12 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<string>No</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_purelive-sync._tcp</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan the QR code shown by another device to sync with it</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Receive data synced from other devices on the local network</string>
 	<key>NSPhotoLibraryUsageDescription</key>
