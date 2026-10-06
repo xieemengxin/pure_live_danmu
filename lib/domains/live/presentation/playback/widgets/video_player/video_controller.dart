@@ -837,9 +837,9 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
     final volumeSub = _volumeController.addListener((volume) {
       if (!_ownsVolume || !volume.isFinite) return;
       _volumeRevision++;
-      final resolved = volume.clamp(0.0, 1.0).toDouble();
-      currentVolume.value = resolved;
-      unawaited(room.saveCurrentVolume(resolved));
+      // The device's level is not a preference of this room: it is not
+      // recorded under the room.
+      currentVolume.value = volume.clamp(0.0, 1.0).toDouble();
     }, fetchInitialVolume: false);
     volumeSub.onError((Object error, StackTrace stack) {
       log('Observe system volume failed', name: 'VideoController.Volume', error: error, stackTrace: stack);
@@ -894,7 +894,7 @@ class VideoController with ChangeNotifier implements DanmakuSettingsSource {
       if (!_ownsVolume) return false;
       if (revision != _volumeRevision) return true;
       currentVolume.value = resolved;
-      await room.saveCurrentVolume(resolved);
+      if (!_usesSystemVolume) await room.saveCurrentVolume(resolved);
       return true;
     } catch (error, stack) {
       log('Set volume failed', name: 'VideoController.Volume', error: error, stackTrace: stack);

@@ -10,6 +10,7 @@ import 'package:pure_live/core/stream/hls_source_query_policy.dart';
 import 'package:pure_live/core/models/live_play_quality.dart';
 import 'package:media_core_media_kit/media_core_media_kit.dart';
 import 'package:pure_live/core/player/kernel/floating_playback.dart';
+import 'package:pure_live/core/player/core/live_room_volume_manager.dart';
 import 'package:pure_live/core/player/presentation/windows_pip_driver.dart';
 import 'package:pure_live/core/player/core/portrait_stream_support.dart';
 import 'package:pure_live/core/player/kernel/player_kernel_service.dart';
@@ -57,6 +58,7 @@ final class LivePlayerFacade {
   StreamSubscription<PlayerCoreState>? _stateSub;
   StreamSubscription<bool>? _playingSub;
   StreamSubscription<PlayerFailure>? _errorSub;
+  StreamSubscription<PlayerHandle>? _handleSub;
   bool _disposed = false;
 
   FacadeStreamCommit? commit;
@@ -120,6 +122,22 @@ final class LivePlayerFacade {
         ),
       );
     });
+    // Every open plays on a freshly created engine, which starts at full
+    // volume: the first one, and each one a line switch, a retry or an
+    // automatic recovery replaces it with.
+    _handleSub = _controller.onHandleChanged.listen((_) => unawaited(_applyRoomVolume()));
+  }
+
+  /// Gives the current engine the volume the current room calls for.
+  Future<void> _applyRoomVolume() async {
+    final room = _room;
+    if (room == null || _disposed) return;
+    try {
+      await setVolume(LiveRoomVolumeManager.getEngineVolume(room));
+    } catch (_) {
+      // The engine was replaced or released while the write was queued; the
+      // one that replaced it gets its own.
+    }
   }
 
   Future<void> play(
@@ -171,7 +189,7 @@ final class LivePlayerFacade {
     // 轮播房的起播位置：本条源重新武装，等时长就绪后 seek 一次。
     _pendingSeekAt = committed?.startAt;
     _publishCommit(sourceUrl, playUrls, committed?.qualities ?? qualities, committed?.currentQuality ?? currentQuality);
-    if (liveroom != null) await setVolume(liveroom.getSavedVolume().clamp(0.0, 1.0));
+    await _applyRoomVolume();
   }
 
   Future<void> playOwned(
@@ -206,7 +224,7 @@ final class LivePlayerFacade {
       committed?.qualities ?? qualities,
       committed?.currentQuality ?? currentQuality,
     );
-    await setVolume(liveroom.getSavedVolume().clamp(0.0, 1.0));
+    await _applyRoomVolume();
   }
 
   void _publishCommit(String url, List<String> uiLines, List<LivePlayQuality> qualities, int currentQuality) {
@@ -561,6 +579,7 @@ final class LivePlayerFacade {
     await _stateSub?.cancel();
     await _playingSub?.cancel();
     await _errorSub?.cancel();
+    await _handleSub?.cancel();
     await _controller.dispose();
     await _stateSubject.close();
     await _playingSubject.close();
