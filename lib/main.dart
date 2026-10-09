@@ -17,6 +17,8 @@ import 'package:pure_live/core/player/models/player_engine.dart';
 import 'package:pure_live/core/platform/share_command_handler.dart';
 import 'package:pure_live/core/config/player_settings_controller.dart';
 import 'package:pure_live/domains/live/domain/global_player_service.dart';
+import 'package:pure_live/domains/live/domain/live_player_facade.dart';
+import 'package:pure_live/domains/live/data/stream/huya_flv_relay.dart';
 import 'package:pure_live/core/player/presentation/popup_route_tracker.dart';
 import 'package:pure_live/domains/wallpaper/presentation/app_background.dart';
 import 'package:pure_live/domains/iptv/data/services/epg_import_manager.dart';
@@ -33,6 +35,11 @@ void main(List<String> args) async {
   FlutterError.onError = (details) {
     FlutterError.dumpErrorToConsole(details, forceReport: true);
   };
+
+  // Huya FLV lines play through a local relay (mid-stream parameter-set
+  // changes, URL renewal). Installed before any facade can be created, so the
+  // command-line room fallback in the home page gets it as well.
+  LivePlayerFacade.defaultSourceInterceptor = HuyaFlvRelay.intercept;
 
   await AppInitializer().initialize(args);
 

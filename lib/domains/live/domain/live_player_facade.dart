@@ -20,15 +20,25 @@ import 'package:pure_live/domains/live/presentation/playback/widgets/danmaku/com
 import 'package:media_core_better_player/media_core_better_player.dart' show kBetterPlayerBackendId;
 import 'package:media_core_ijk_player/media_core_ijk_player.dart' show kIjkPlayerBackendId;
 
+/// Rewrites the candidate sources of one play before the kernel sees them.
 ///
+/// The hook is where a platform's lines are routed through an app-owned input
+/// (a loopback relay) without the room losing its line list: the returned
+/// sources keep their ids and URIs and only carry a custom-input recipe. The
+/// play's [PlaybackSourceResolver] is handed over so such an input can renew
+/// a signed URL on its own when its upstream connection ends.
+typedef FacadeSourceInterceptor = Future<List<PlayerSource>> Function(
+  List<PlayerSource> sources,
+  PlaybackSourceResolver? sourceResolver,
+);
 
 final class LivePlayerFacade {
   LivePlayerFacade({
     PlayerEngine defaultEngine = PlayerEngine.mediaKit,
-    Future<List<PlayerSource>> Function(List<PlayerSource> sources)? interceptSources,
+    FacadeSourceInterceptor? interceptSources,
     EngineFallbackSourceResolver? onEngineFallbackSources,
   }) : preferredEngine = defaultEngine {
-    _interceptSources = interceptSources;
+    this.interceptSources = interceptSources ?? defaultSourceInterceptor;
     _controller = LivePlaybackController(kernel, onEngineFallbackSources: onEngineFallbackSources);
     _bindController();
     // The fullscreen driver is the single source of truth for the fullscreen
@@ -41,7 +51,16 @@ final class LivePlayerFacade {
     isSystemFullscreen.value = fullscreenDriver.isSystemFullscreen;
   }
 
-  Future<List<PlayerSource>> Function(List<PlayerSource> sources)? _interceptSources;
+  /// Installed by the app before the global facade is created; a facade built
+  /// without an explicit interceptor picks it up. Platform-specific transport
+  /// (the data layer) is wired here rather than imported by this domain class.
+  static FacadeSourceInterceptor? defaultSourceInterceptor;
+
+  FacadeSourceInterceptor? interceptSources;
+
+  /// The resolver of the latest [play], handed to [interceptSources] on that
+  /// play and on every engine switch that replays its lines.
+  PlaybackSourceResolver? _lastSourceResolver;
 
   static PlayerKernel get kernel => PlayerKernelService.instance.kernel;
 
@@ -161,6 +180,7 @@ final class LivePlayerFacade {
     _room = liveroom;
     _lastHeaders = Map<String, String>.unmodifiable(headers);
     _lastLines = List<String>.unmodifiable(urls);
+    _lastSourceResolver = sourceResolver;
 
     await _controller.play(
       LiveSourceRequest(
@@ -400,9 +420,9 @@ final class LivePlayerFacade {
   }
 
   Future<List<PlayerSource>> _intercept(List<PlayerSource> sources) async {
-    final interceptor = _interceptSources;
+    final interceptor = interceptSources;
     if (interceptor == null) return sources;
-    final intercepted = await interceptor(sources);
+    final intercepted = await interceptor(sources, _lastSourceResolver);
     return intercepted.isEmpty ? sources : intercepted;
   }
 

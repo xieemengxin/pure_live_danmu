@@ -6,6 +6,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:pure_live/core/stream/ffmpeg_flv_input_relay.dart' show FlvInputFramer;
+import 'package:pure_live/domains/live/data/stream/flv_param_set_injector.dart';
 
 /// A live FLV source whose URL stops working at a known time (Douyu's
 /// anonymous original quality: `expire=300`, the CDN closes the stream after
@@ -92,6 +93,11 @@ abstract final class FlvTag {
 /// timestamps, so the player sees no gap, repeat or reset; a new connection
 /// on another timeline is shifted to continue the old one. If the old stream
 /// ends before a new URL is ready, the switch skips at most one GOP.
+///
+/// With [injectParameterSets] (the default) an AVC sequence header whose
+/// SPS/PPS differ from the ones in force — a broadcaster re-publishing
+/// mid-stream, on this or on a renewed connection — has its parameter sets
+/// repeated in-band on the next NALU tag, see [FlvParamSetInjector].
 class FlvSpliceSession {
   FlvSpliceSession({
     required FlvLeasedSource initial,
@@ -102,14 +108,17 @@ class FlvSpliceSession {
     DateTime Function()? now,
     this.handoverTimeout = const Duration(seconds: 10),
     this.alignmentWindow = const Duration(seconds: 60),
+    bool injectParameterSets = true,
   }) : _source = initial,
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now,
+       _injector = injectParameterSets ? FlvParamSetInjector() : null;
 
   final FlvTagReaderOpener _open;
   final FlvSourceRenewer _renew;
   final void Function(Uint8List packet) _emit;
   final void Function(FlvLeasedSource source)? _onRenewed;
   final DateTime Function() _now;
+  final FlvParamSetInjector? _injector;
 
   /// Longest wait for the old stream to reach the new keyframe.
   final Duration handoverTimeout;
@@ -131,10 +140,23 @@ class FlvSpliceSession {
 
   int get switches => _switches;
 
+  /// NALU tags that received an in-band copy of changed parameter sets.
+  int get injectedParameterSets => _injector?.injectedTags ?? 0;
+
   static final Object _deadline = Object();
 
   Future<void> run() async {
-    final first = await _open(_source.url);
+    FlvTagReader first;
+    try {
+      first = await _open(_source.url);
+    } on Object catch (error) {
+      // A URL whose credential already lapsed (a reopen minutes after the
+      // room was entered) is renewed once instead of failing the session.
+      debugPrint('FlvSpliceSession: initial open failed, renewing: $error');
+      _source = await _renew(_source);
+      if (_cancelled) return;
+      first = await _open(_source.url);
+    }
     _reader = first;
     final header = await first.next();
     if (header == null) throw const FormatException('Empty FLV upstream');
@@ -305,7 +327,8 @@ class FlvSpliceSession {
       if (_lastAudio != null && ts <= _lastAudio!) return;
       _lastAudio = ts;
     }
-    _emit(offset == 0 ? tag : FlvTag.withTimestamp(tag, ts));
+    final packet = offset == 0 ? tag : FlvTag.withTimestamp(tag, ts);
+    _emit(_injector == null ? packet : _injector.rewrite(packet));
   }
 
   Future<void> _dropReader() async {
