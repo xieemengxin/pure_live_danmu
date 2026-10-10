@@ -270,17 +270,8 @@ class CustomTitleBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final LinearGradient bgGradient = isDark
-        ? const LinearGradient(
-            colors: [Color(0xFF0D1B2A), Color(0xFF1B263B), Color(0xFF141E27)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          )
-        : const LinearGradient(
-            colors: [Color(0xFFE8FAFC), Color(0xFFC8F1F5), Color(0xFF9BE7F0)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          );
+    // 开屏路由期间标题栏与开屏页同色：浅色模式白底，深色模式用主题的页面底色。
+    final Color splashBarColor = isDark ? theme.scaffoldBackgroundColor : Colors.white;
 
     return Obx(() {
       final isFullscreen = GlobalPlayerService.instance.player.isWindowFullscreen.value;
@@ -313,10 +304,7 @@ class CustomTitleBar extends StatelessWidget {
 
       return Container(
         height: 32,
-        decoration: BoxDecoration(
-          gradient: currentRouteIskSplash ? bgGradient : null,
-          color: currentRouteIskSplash ? null : bgColor,
-        ),
+        decoration: BoxDecoration(color: currentRouteIskSplash ? splashBarColor : bgColor),
         child: Row(
           children: [
             Expanded(
