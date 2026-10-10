@@ -199,7 +199,7 @@ class AppPages {
           showTextLogo: true,
           logoText: i18n("welcome_use"),
           textStyle: AppTextStyles.t20.copyWith(fontWeight: FontWeight.bold, color: textColor),
-          loaderType: LoaderType.progressBar,
+          showLoader: false,
           onNextPressed: () async {
             // Spend a small, bounded part of the existing launch transition on
             // the already-running favourite verification. Fast networks enter
