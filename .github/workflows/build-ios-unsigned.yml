@@ -185,7 +185,7 @@ jobs:
           codesign --verify --deep --strict "$TMPD/Payload/Runner.app" && echo "SIGNATURE OK"
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pure-live-ios-trollstore-ipa
           path: |
@@ -198,7 +198,7 @@ jobs:
       # ---------------------------------------------------------------
       - name: Create GitHub Release
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release }}
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ inputs.release_tag }}
           name: ${{ inputs.release_tag }}
