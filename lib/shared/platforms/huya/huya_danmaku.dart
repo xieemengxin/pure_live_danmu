@@ -56,8 +56,21 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
   Future<void>? _superChatRefreshFuture;
   bool _superChatRefreshQueued = false;
 
+  /// 虎牙对每个心跳都回 `EWSCmdS2C_HeartBeatRsp`（21），房间人数（8006）也每 20 秒
+  /// 推一次，所以健康连接上从来不会静默超过 30 秒。
   @override
-  int heartbeatTime = 60 * 1000;
+  int heartbeatTime = 30 * 1000;
+
+  /// 这么久一个包都没收到就当连接已死、换新连接。手机切网、App 从后台回来时，
+  /// 旧 TCP 常常不报错也不再有数据（半开连接）；默认的 180 秒窗口加上 60 秒心跳
+  /// 粒度，要等将近 4 分钟弹幕才恢复。
+  static const Duration inactivityTimeout = Duration(seconds: 70);
+
+  /// 重连次数上限。底层每次重连间隔最多 6 秒，300 次约半小时；默认的 8 次只撑
+  /// 40 秒左右，进电梯、地铁断网稍久就彻底放弃，只能重进直播间。虎牙网页端也是
+  /// 断线后持续重连（最多 120 次、间隔封顶 30 秒）。
+  static const int maxReconnectAttempts = 300;
+
   bool _connected = false;
 
   @override
@@ -125,6 +138,7 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
     _superChatRefreshFuture = null;
     _emittedSuperChats.clear();
     _superChatRefreshQueued = false;
+    _lastLiveStateUri = null;
     await webScoketUtils?.close();
     webScoketUtils = null;
     if (generation != _generation) return;
@@ -139,6 +153,7 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
       url: viewer == null ? serverUrl : huyaAuthenticatedDanmakuUrl(serverUrl, viewer),
       connector: _connector,
       heartBeatTime: heartbeatTime,
+      inactivityTimeout: inactivityTimeout,
       onMessage: (e) {
         if (generation == _generation) decodeMessage(e);
       },
@@ -165,7 +180,7 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
         _failPendingSends('弹幕连接已断开，请稍后重试');
         onClose?.call("服务器连接失败$e");
       },
-    );
+    )..maxReconnectTime = maxReconnectAttempts;
     await webScoketUtils?.connect();
   }
 
@@ -398,23 +413,39 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
       // awaiting the HTTP call also serializes unrelated websocket messages.
       // Reconcile in the background with a small bounded retry window instead.
       _scheduleSuperChatRefresh(_generation);
-    } else if (uri == 8001) {
-      // `EndLiveNotice`：主播结束直播（Tars 字段 0 是 lPresenterUid，0 表示没点名）。
-      // 服务器不会关掉这条 socket，3.x 也忽略了它，于是房间一直停在"直播中"
-      // （上游 C-10）。这里照虎牙网页客户端的行为结束这一路弹幕。
-      var presenterUid = 0;
-      try {
-        final raw = TarsInputStream(Uint8List.fromList(payload)).read(0, 0, false);
-        presenterUid = raw is int ? raw : 0;
-      } catch (_) {
-        // 不是结束通知：当作没收到。
-        return;
-      }
-      final mine = danmakuArgs.uid;
-      if (presenterUid == 0 || presenterUid == mine) {
-        onClose?.call("直播已结束");
-        await stop();
-      }
+    } else if (uri == 8001 || uri == 8000) {
+      // `EndLiveNotice`（8001）/ `BeginLiveNotice`（8000）：Tars 字段 0 都是
+      // lPresenterUid，0 表示没点名。虎牙网页端的信令层收到它们不会断开连接，同一条
+      // 连接之后照样能收到主播重新开播的 8000（2026-11 实测：直播中途重推流的房间
+      // 会收到 8000）。这里同样只提示、不断开：以前收到 8001 就结束这一路弹幕，
+      // 主播再开播后弹幕一直不来，只能重进直播间。
+      if (!_isOwnPresenterNotice(payload)) return;
+      // 重推流时 8000 会连着来好几条：同一状态只提示一次。
+      if (_lastLiveStateUri == uri) return;
+      _lastLiveStateUri = uri;
+      onMessage?.call(
+        LiveMessage(
+          type: LiveMessageType.notice,
+          userName: '',
+          message: uri == 8001 ? '主播已下播或断流' : '主播开始直播',
+          color: LiveMessageColor.white,
+          messageId: messageId > 0 ? 'huya:$messageId' : '',
+        ),
+      );
+    }
+  }
+
+  /// 上一次提示的直播状态通知（8000/8001），进房时清空。
+  int? _lastLiveStateUri;
+
+  bool _isOwnPresenterNotice(List<int> payload) {
+    try {
+      final raw = TarsInputStream(Uint8List.fromList(payload)).read(0, 0, false);
+      final presenterUid = raw is int ? raw : 0;
+      return presenterUid == 0 || presenterUid == danmakuArgs.uid;
+    } catch (_) {
+      // 解不出主播 uid：不是这条通知，当作没收到。
+      return false;
     }
   }
 

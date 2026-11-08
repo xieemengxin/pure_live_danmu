@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' as io;
 
+import 'package:clock/clock.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -210,7 +211,7 @@ class WebScoketUtils {
     status = SocketStatus.connected;
     reconnectTimer?.cancel();
     reconnectTimer = null;
-    _lastMessageAt = DateTime.now();
+    _lastMessageAt = clock.now();
 
     streamSubscription = channel.stream.listen(
       (data) {
@@ -243,7 +244,7 @@ class WebScoketUtils {
     heartBeatTimer = Timer.periodic(Duration(milliseconds: heartBeatTime), (_) {
       if (status != SocketStatus.connected) return;
       final lastMessageAt = _lastMessageAt;
-      if (lastMessageAt != null && DateTime.now().difference(lastMessageAt) >= _resolvedInactivityTimeout) {
+      if (lastMessageAt != null && clock.now().difference(lastMessageAt) >= _resolvedInactivityTimeout) {
         _scheduleReconnect('WebSocket heartbeat timed out');
         return;
       }
@@ -261,7 +262,7 @@ class WebScoketUtils {
 
   void receiveMessage(dynamic data) {
     reconnectTime = 0;
-    _lastMessageAt = DateTime.now();
+    _lastMessageAt = clock.now();
     onMessage?.call(data);
   }
 
