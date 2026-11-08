@@ -193,25 +193,29 @@ void main() {
     });
   });
 
-  test('同一状态的通知连发几次只提示一次（实测重推流时 8000 会连着来 3 条）', () {
+  test('直播中虎牙周期性重发的开播通知（8000）不提示；下播后再开播才提示，且各提示一次', () {
     fakeAsync((async) {
       final danmaku = create((_) => _FakeChannel(healthy: true));
       unawaited(danmaku.start(room()));
       async.flushMicrotasks();
       final channel = channels.single;
 
+      // 实测：直播中的房间每 5 分钟左右收到一次同一场次的 8000，一次连着 3 条。
       for (var i = 0; i < 3; i++) {
         channel.push(_beginLiveNotice(_presenterUid));
       }
+      async.elapse(const Duration(seconds: 1));
+      expect(received.where((m) => m.type == LiveMessageType.notice), isEmpty);
+
       channel.push(_endLiveNotice(_presenterUid));
       channel.push(_endLiveNotice(_presenterUid));
+      channel.push(_beginLiveNotice(_presenterUid));
       channel.push(_beginLiveNotice(_presenterUid));
       async.elapse(const Duration(seconds: 1));
 
       final notices = received.where((m) => m.type == LiveMessageType.notice).map((m) => m.message).toList();
-      expect(notices, hasLength(3));
-      expect(notices.first, notices.last);
-      expect(notices[1], isNot(notices.first));
+      expect(notices, hasLength(2));
+      expect(notices.first, isNot(notices.last));
 
       unawaited(danmaku.stop());
       async.flushMicrotasks();

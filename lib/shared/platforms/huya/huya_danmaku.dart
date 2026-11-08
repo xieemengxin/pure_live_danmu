@@ -415,14 +415,18 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
       _scheduleSuperChatRefresh(_generation);
     } else if (uri == 8001 || uri == 8000) {
       // `EndLiveNotice`（8001）/ `BeginLiveNotice`（8000）：Tars 字段 0 都是
-      // lPresenterUid，0 表示没点名。虎牙网页端的信令层收到它们不会断开连接，同一条
-      // 连接之后照样能收到主播重新开播的 8000（2026-11 实测：直播中途重推流的房间
-      // 会收到 8000）。这里同样只提示、不断开：以前收到 8001 就结束这一路弹幕，
-      // 主播再开播后弹幕一直不来，只能重进直播间。
+      // lPresenterUid，0 表示没点名。虎牙网页端的信令层收到它们不会断开连接。这里
+      // 同样只提示、不断开：以前收到 8001 就结束这一路弹幕，主播下播后又开播时弹幕
+      // 一直不来，只能重进直播间。
+      //
+      // 2026-11-08 实测（约 100 个房间、40 分钟）：8001 带 iReason/sReason（0 是
+      // "主播结束直播"，3 是平台停播）；直播中的房间每 5 分钟左右会收到一次同一
+      // lLiveId 的 8000、一次连着几条，并不代表重新开播。所以 8000 只在之前收到过
+      // 8001 时才提示"主播开始直播"，其余静默；同一状态连发只提示一次。
       if (!_isOwnPresenterNotice(payload)) return;
-      // 重推流时 8000 会连着来好几条：同一状态只提示一次。
-      if (_lastLiveStateUri == uri) return;
+      final previous = _lastLiveStateUri;
       _lastLiveStateUri = uri;
+      if (uri == 8001 ? previous == 8001 : previous != 8001) return;
       onMessage?.call(
         LiveMessage(
           type: LiveMessageType.notice,
@@ -435,7 +439,7 @@ class HuyaDanmaku implements LiveDanmaku, LiveDanmakuSender {
     }
   }
 
-  /// 上一次提示的直播状态通知（8000/8001），进房时清空。
+  /// 上一次收到的直播状态通知（8000/8001），进房时清空。
   int? _lastLiveStateUri;
 
   bool _isOwnPresenterNotice(List<int> payload) {
